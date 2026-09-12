@@ -35,6 +35,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 
 - 一键诊断：系统、CPU/内存、C盘、网络、Windows Update、系统文件签名、关键服务、电池和打印机综合检查
 - 网络诊断：网卡连接状态、MAC、IPv4、子网掩码、DHCP、DNS、网关、公网、DNS 解析和 HTTPS/TLS
+- 代理感知：识别 Windows 系统代理、WinHTTP 代理和 VPN/TUN；公网直连失败不会单独归因于网卡故障
 - 诊断结论：使用 PASS / WARNING / FAIL / INFO 统一状态，输出问题说明和处理建议
 - 修复后复检：网络诊断可按建议执行现有安全修复，并自动重新检测、比较修复结果
 - 打印机：查看打印机与队列、清理队列、重启 Print Spooler、一键修复
@@ -52,7 +53,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticRules.ps1
 ```
 
-测试使用模拟数据验证网络故障规则、磁盘阈值、Windows Update 服务、关键服务和 TXT / JSON 报告兼容性，不会修改系统配置。
+测试使用模拟数据验证正常网络、系统代理、WinHTTP、VPN/TUN、代理不可用、无 IPv4、网关/DNS 异常、公网 Ping 被阻断、磁盘阈值、Windows Update 服务、关键服务和 TXT / JSON 报告兼容性，不会修改系统配置。
 
 ## 兼容性验证
 

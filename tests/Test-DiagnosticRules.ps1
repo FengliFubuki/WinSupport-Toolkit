@@ -33,6 +33,21 @@ function Assert-Contains {
     Write-Host ('[FAIL] ' + $Name + '，未找到：' + $ExpectedPart) -ForegroundColor Red
 }
 
+function Assert-NotContains {
+    param(
+        [string]$Text,
+        [string]$UnexpectedPart,
+        [string]$Name
+    )
+    $script:TestCount++
+    if (-not $Text -or -not $Text.Contains($UnexpectedPart)) {
+        Write-Host ('[PASS] ' + $Name) -ForegroundColor Green
+        return
+    }
+    $script:TestFailures++
+    Write-Host ('[FAIL] ' + $Name + '，不应包含：' + $UnexpectedPart) -ForegroundColor Red
+}
+
 function Get-TestStatus {
     param($Results, [string]$Name)
     $item = $Results | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
@@ -48,10 +63,13 @@ function New-TestAdapter {
         [bool]$Connected = $true,
         [string[]]$IPAddresses = @('192.168.1.10'),
         [string[]]$Gateways = @('192.168.1.1'),
-        [string[]]$DnsServers = @('223.5.5.5')
+        [string[]]$DnsServers = @('223.5.5.5'),
+        [bool]$IsVirtual = $false,
+        [string]$MediaType = '802.3'
     )
     return [pscustomobject]@{
         Name        = $Name
+        Description = $Name
         Status      = $Status
         Enabled     = $Enabled
         Connected   = $Connected
@@ -61,6 +79,9 @@ function New-TestAdapter {
         Gateways    = @($Gateways)
         DnsServers  = @($DnsServers)
         DhcpEnabled = $true
+        IsVirtual   = $IsVirtual
+        MediaType   = $MediaType
+        PhysicalMediaType = ''
     }
 }
 
@@ -72,7 +93,11 @@ function New-TestEvidence {
         [bool]$GatewayPingOk = $true,
         [bool]$PublicOk = $true,
         [bool]$DnsOk = $true,
-        [bool]$HttpsOk = $true
+        [bool]$HttpsOk = $true,
+        [string]$HttpsMode = 'Direct',
+        [bool]$ProxyEnabled = $false,
+        [bool]$WinHttpProxyEnabled = $false,
+        [bool]$VpnDetected = $false
     )
     $public = [pscustomobject]@{
         Success = $PublicOk
@@ -86,15 +111,34 @@ function New-TestEvidence {
         Summary = if ($DnsOk) { 'www.microsoft.com -> 20.0.0.1' } else { '所有测试域名均无法解析' }
     }
     $https = [pscustomobject]@{
-        Success = $HttpsOk
-        Target  = if ($HttpsOk) { 'www.microsoft.com' } else { '' }
-        Detail  = if ($HttpsOk) { 'TLS 握手成功' } else { 'TLS 握手失败' }
+        Success        = $HttpsOk
+        Target         = if ($HttpsOk) { 'www.microsoft.com' } else { '' }
+        Detail         = if ($HttpsOk) { 'HTTPS 访问成功' } else { 'HTTPS 访问失败' }
+        Mode           = if ($HttpsOk) { $HttpsMode } else { 'None' }
+        DirectSuccess  = ($HttpsOk -and $HttpsMode -eq 'Direct')
+        ProxyAttempted = ($ProxyEnabled -or $WinHttpProxyEnabled -or $VpnDetected)
+        ProxySuccess   = ($HttpsOk -and $HttpsMode -eq 'SystemProxy')
+    }
+    $anyProxy = ($ProxyEnabled -or $WinHttpProxyEnabled -or $VpnDetected)
+    $proxySummary = '未启用代理'
+    if ($anyProxy) {
+        $parts = @()
+        if ($ProxyEnabled) { $parts += '系统代理：127.0.0.1:7890' }
+        if ($WinHttpProxyEnabled) { $parts += 'WinHTTP：127.0.0.1:7890' }
+        if ($VpnDetected) { $parts += 'VPN/TUN：Test Tunnel' }
+        $proxySummary = ($parts -join '；')
     }
     $proxy = [pscustomobject]@{
-        Enabled = $false
-        Server  = ''
+        Enabled = $ProxyEnabled
+        Server  = if ($ProxyEnabled) { '127.0.0.1:7890' } else { '' }
         Bypass  = ''
-        Summary = '未启用代理'
+        Summary = $proxySummary
+        WinHttpEnabled = $WinHttpProxyEnabled
+        WinHttpServer = if ($WinHttpProxyEnabled) { '127.0.0.1:7890' } else { '' }
+        WinHttpSummary = if ($WinHttpProxyEnabled) { 'WinHTTP 代理：127.0.0.1:7890' } else { '未检测到 WinHTTP 代理' }
+        VpnOrTunnelDetected = $VpnDetected
+        VpnAdapterNames = if ($VpnDetected) { @('Test Tunnel') } else { @() }
+        AnyProxy = $anyProxy
     }
     $adapters = @()
     if ($Adapter) { $adapters = @($Adapter) }
@@ -128,12 +172,37 @@ Assert-Equal 'PASS' (Get-TestStatus $normalResults 'IP 配置') '正常网络：
 Assert-Equal 'PASS' (Get-TestStatus $normalResults 'DNS 解析') '正常网络：DNS 通过'
 Assert-Equal 'PASS' (Get-TestStatus $normalResults 'HTTPS 访问') '正常网络：HTTPS 通过'
 Assert-Equal $true $normalSummary.IsHealthy '正常网络：诊断汇总无问题'
+$tunnelAdapter = New-TestAdapter -Name 'Test Tunnel' -MediaType 'Tunnel' -IsVirtual $true
+Assert-Equal $true (Test-SupportVpnOrTunnelAdapter $tunnelAdapter) 'VPN/TUN：按接口类型识别'
+
+$proxyNormalEvidence = New-TestEvidence $normalAdapter -HttpsMode 'SystemProxy' -ProxyEnabled $true
+$proxyNormalResults = @(ConvertTo-SupportNetworkDiagnosticResults $proxyNormalEvidence)
+$proxyNormalSummary = Get-SupportNetworkDiagnosticSummary $proxyNormalResults
+Assert-Equal 'PASS' (Get-TestStatus $proxyNormalResults '网络适配器') '系统代理正常：网卡仍为 PASS'
+Assert-Equal 'PASS' (Get-TestStatus $proxyNormalResults 'HTTPS 访问') '系统代理正常：HTTPS 通过'
+Assert-Contains $proxyNormalSummary.PrimaryDiagnosis '本地网络适配器工作正常' '系统代理正常：结论不归因网卡'
+Assert-Contains $proxyNormalSummary.PrimaryDiagnosis '当前 HTTPS 网络访问正常' '系统代理正常：明确 HTTPS 正常'
+Assert-Equal $true $proxyNormalSummary.IsHealthy '系统代理正常：诊断汇总无故障'
+
+$proxyUnavailableEvidence = New-TestEvidence $normalAdapter -PublicOk $false -DnsOk $false -HttpsOk $false -ProxyEnabled $true
+$proxyUnavailableResults = @(ConvertTo-SupportNetworkDiagnosticResults $proxyUnavailableEvidence)
+$proxyUnavailableSummary = Get-SupportNetworkDiagnosticSummary $proxyUnavailableResults
+Assert-Equal 'PASS' (Get-TestStatus $proxyUnavailableResults '网络适配器') '代理不可用：网卡仍为 PASS'
+Assert-Contains $proxyUnavailableSummary.PrimaryDiagnosis '代理服务不可用' '代理不可用：结论指向代理路径'
+Assert-NotContains $proxyUnavailableSummary.PrimaryDiagnosis '网络适配器可能未正常工作' '代理不可用：不误判网卡故障'
 
 $noAdapterEvidence = New-TestEvidence $null -Gateway '' -GatewayPingOk $false -PublicOk $false -DnsOk $false -HttpsOk $false
 $noAdapterResults = @(ConvertTo-SupportNetworkDiagnosticResults $noAdapterEvidence)
 $noAdapterSummary = Get-SupportNetworkDiagnosticSummary $noAdapterResults
 Assert-Equal 'FAIL' (Get-TestStatus $noAdapterResults '网络适配器') '无网卡：判定失败'
 Assert-Contains $noAdapterSummary.PrimaryDiagnosis '网络适配器' '无网卡：结论命中情况 A'
+
+$disabledAdapter = New-TestAdapter -Status '已禁用' -Enabled $false -Connected $false
+$disabledEvidence = New-TestEvidence $disabledAdapter -Gateway '' -GatewayPingOk $false -PublicOk $false -DnsOk $false -HttpsOk $false
+$disabledResults = @(ConvertTo-SupportNetworkDiagnosticResults $disabledEvidence)
+$disabledSummary = Get-SupportNetworkDiagnosticSummary $disabledResults
+Assert-Equal 'FAIL' (Get-TestStatus $disabledResults '网络适配器') '禁用网卡：判定失败'
+Assert-Contains $disabledSummary.PrimaryDiagnosis '网络适配器' '禁用网卡：结论指向本地适配器'
 
 $apipaAdapter = New-TestAdapter -IPAddresses @('169.254.10.20') -Gateways @() -DnsServers @()
 $apipaEvidence = New-TestEvidence $apipaAdapter -Gateway '' -GatewayPingOk $false -PublicOk $false -DnsOk $false -HttpsOk $false
@@ -148,20 +217,54 @@ $gatewayFailEvidence = New-TestEvidence $normalAdapter -GatewayPingOk $false -Pu
 $gatewayFailResults = @(ConvertTo-SupportNetworkDiagnosticResults $gatewayFailEvidence)
 $gatewayFailSummary = Get-SupportNetworkDiagnosticSummary $gatewayFailResults
 Assert-Equal 'WARNING' (Get-TestStatus $gatewayFailResults '网关连通性') '网关失败：判定警告'
-Assert-Equal 'FAIL' (Get-TestStatus $gatewayFailResults 'Internet') '网关失败：公网判定失败'
-Assert-Contains $gatewayFailSummary.PrimaryDiagnosis '无法访问公网' '网关失败：结论命中情况 C'
+Assert-Equal 'FAIL' (Get-TestStatus $gatewayFailResults '公网连通性') '网关失败：公网判定失败'
+Assert-Contains $gatewayFailSummary.PrimaryDiagnosis '公网连通性和 DNS 解析均失败' '网关失败：结论命中情况 C'
+Assert-Equal 'PASS' (Get-TestStatus $gatewayFailResults '网络适配器') '网关失败：网卡仍为 PASS'
 
 $dnsFailEvidence = New-TestEvidence $normalAdapter -DnsOk $false -HttpsOk $false
 $dnsFailResults = @(ConvertTo-SupportNetworkDiagnosticResults $dnsFailEvidence)
 $dnsFailSummary = Get-SupportNetworkDiagnosticSummary $dnsFailResults
 Assert-Equal 'FAIL' (Get-TestStatus $dnsFailResults 'DNS 解析') 'DNS 异常：判定失败'
 Assert-Contains $dnsFailSummary.PrimaryDiagnosis 'DNS 解析异常' 'DNS 异常：结论命中情况 D'
+Assert-Equal 'PASS' (Get-TestStatus $dnsFailResults '网络适配器') 'DNS 异常：网卡仍为 PASS'
 
 $httpsFailEvidence = New-TestEvidence $normalAdapter -HttpsOk $false
 $httpsFailResults = @(ConvertTo-SupportNetworkDiagnosticResults $httpsFailEvidence)
 $httpsFailSummary = Get-SupportNetworkDiagnosticSummary $httpsFailResults
 Assert-Equal 'FAIL' (Get-TestStatus $httpsFailResults 'HTTPS 访问') 'HTTPS 异常：判定失败'
-Assert-Contains $httpsFailSummary.PrimaryDiagnosis 'HTTPS 访问异常' 'HTTPS 异常：结论命中情况 E'
+Assert-Contains $httpsFailSummary.PrimaryDiagnosis 'HTTPS 应用层访问失败' 'HTTPS 异常：结论命中情况 E'
+Assert-Equal 'PASS' (Get-TestStatus $httpsFailResults '网络适配器') 'HTTPS 异常：网卡仍为 PASS'
+
+$publicBlockedEvidence = New-TestEvidence $normalAdapter -PublicOk $false -DnsOk $true -HttpsOk $true -HttpsMode 'Direct'
+$publicBlockedResults = @(ConvertTo-SupportNetworkDiagnosticResults $publicBlockedEvidence)
+$publicBlockedSummary = Get-SupportNetworkDiagnosticSummary $publicBlockedResults
+Assert-Equal 'PASS' (Get-TestStatus $publicBlockedResults '网络适配器') '公网 Ping 被阻断：网卡为 PASS'
+Assert-Equal 'INFO' (Get-TestStatus $publicBlockedResults '公网连通性') '公网 Ping 被阻断：公网直连标记 INFO'
+Assert-Contains $publicBlockedSummary.PrimaryDiagnosis '不能据此判定网络故障' '公网 Ping 被阻断：结论不判故障'
+Assert-Equal $true $publicBlockedSummary.IsHealthy '公网 Ping 被阻断：HTTPS 正常时整体健康'
+
+$proxyPublicBlockedEvidence = New-TestEvidence $normalAdapter -PublicOk $false -DnsOk $false -HttpsOk $true -HttpsMode 'SystemProxy' -ProxyEnabled $true
+$proxyPublicBlockedResults = @(ConvertTo-SupportNetworkDiagnosticResults $proxyPublicBlockedEvidence)
+$proxyPublicBlockedSummary = Get-SupportNetworkDiagnosticSummary $proxyPublicBlockedResults
+Assert-Equal 'PASS' (Get-TestStatus $proxyPublicBlockedResults '网络适配器') '代理 HTTPS 正常：网卡为 PASS'
+Assert-Equal 'INFO' (Get-TestStatus $proxyPublicBlockedResults '公网连通性') '代理 HTTPS 正常：公网直连标记 INFO'
+Assert-Equal 'INFO' (Get-TestStatus $proxyPublicBlockedResults 'DNS 解析') '代理 HTTPS 正常：DNS 直连标记 INFO'
+Assert-Equal 'PASS' (Get-TestStatus $proxyPublicBlockedResults 'HTTPS 访问') '代理 HTTPS 正常：HTTPS 通过'
+Assert-Contains $proxyPublicBlockedSummary.PrimaryDiagnosis '本地网络适配器工作正常' '代理 HTTPS 正常：结论确认网卡正常'
+Assert-Contains $proxyPublicBlockedSummary.PrimaryDiagnosis '当前 HTTPS 网络访问正常' '代理 HTTPS 正常：结论确认访问正常'
+Assert-Equal $true $proxyPublicBlockedSummary.IsHealthy '代理 HTTPS 正常：整体判定健康'
+
+$winHttpEvidence = New-TestEvidence $normalAdapter -PublicOk $false -DnsOk $false -HttpsOk $true -HttpsMode 'SystemProxy' -WinHttpProxyEnabled $true
+$winHttpResults = @(ConvertTo-SupportNetworkDiagnosticResults $winHttpEvidence)
+$winHttpSummary = Get-SupportNetworkDiagnosticSummary $winHttpResults
+Assert-Equal 'PASS' (Get-TestStatus $winHttpResults '网络适配器') 'WinHTTP 代理：网卡仍为 PASS'
+Assert-Contains $winHttpSummary.PrimaryDiagnosis '代理配置' 'WinHTTP 代理：纳入结论判断'
+
+$vpnEvidence = New-TestEvidence $normalAdapter -PublicOk $false -DnsOk $false -HttpsOk $true -HttpsMode 'SystemProxy' -VpnDetected $true
+$vpnResults = @(ConvertTo-SupportNetworkDiagnosticResults $vpnEvidence)
+$vpnSummary = Get-SupportNetworkDiagnosticSummary $vpnResults
+Assert-Equal 'PASS' (Get-TestStatus $vpnResults '网络适配器') 'VPN/TUN：网卡仍为 PASS'
+Assert-Contains $vpnSummary.PrimaryDiagnosis '代理配置' 'VPN/TUN：纳入结论判断'
 
 $gatewayIcMpBlockedEvidence = New-TestEvidence $normalAdapter -GatewayPingOk $false
 $gatewayIcMpBlockedResults = @(ConvertTo-SupportNetworkDiagnosticResults $gatewayIcMpBlockedEvidence)

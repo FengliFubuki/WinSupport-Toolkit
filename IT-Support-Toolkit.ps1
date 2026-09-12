@@ -329,7 +329,8 @@ function New-SupportDiagnosticResult {
         [string]$Result,
         [string]$Diagnosis = '',
         [string]$Recommendation = '',
-        [string]$ActionCode = ''
+        [string]$ActionCode = '',
+        [string]$AccessMode = ''
     )
     $normalizedStatus = ConvertTo-SupportDiagnosticStatus $Status
     return [pscustomobject]@{
@@ -343,6 +344,7 @@ function New-SupportDiagnosticResult {
         Diagnosis      = $Diagnosis
         Recommendation = $Recommendation
         ActionCode     = $ActionCode
+        AccessMode     = $AccessMode
     }
 }
 
@@ -834,7 +836,7 @@ function Get-SupportNetworkAdapterState {
                 }
 
                 $enabled = ($na.Status -ne 'Disabled')
-                $connected = ($na.Status -eq 'Up' -and $ipv4List.Count -gt 0)
+                $connected = ($na.Status -eq 'Up')
                 $statusText = [string]$na.Status
                 if ($statusText -eq 'Up') { $statusText = '已连接' }
                 elseif ($statusText -eq 'Disconnected') { $statusText = '已断开' }
@@ -855,6 +857,9 @@ function Get-SupportNetworkAdapterState {
                     Gateways      = @($gwList)
                     DnsServers    = @($dnsList)
                     Source        = 'Get-NetAdapter'
+                    IsVirtual     = [bool]$na.Virtual
+                    MediaType     = [string]$na.MediaType
+                    PhysicalMediaType = [string]$na.PhysicalMediaType
                 }
             }
             return $result
@@ -912,7 +917,7 @@ function Get-SupportNetworkAdapterState {
                 $connectionStatus = [int]$na.NetConnectionStatus
             }
             $enabled = [bool]$na.NetEnabled
-            $connected = ($connectionStatus -eq 2 -and $ipv4List.Count -gt 0)
+            $connected = ($connectionStatus -eq 2)
             $result += [pscustomobject]@{
                 Index         = [int]$na.Index
                 Name          = if ($na.NetConnectionID) { $na.NetConnectionID } else { $na.Name }
@@ -927,6 +932,9 @@ function Get-SupportNetworkAdapterState {
                 Gateways      = @($gwList)
                 DnsServers    = @($dnsList)
                 Source        = 'Win32_NetworkAdapter'
+                IsVirtual     = (-not [bool]$na.PhysicalAdapter)
+                MediaType     = [string]$na.AdapterType
+                PhysicalMediaType = ''
             }
         }
     }
@@ -948,6 +956,9 @@ function Get-SupportNetworkAdapterState {
                 Gateways      = @($ad.Gateways)
                 DnsServers    = @($ad.DnsServers)
                 Source        = 'Win32_NetworkAdapterConfiguration'
+                IsVirtual     = $false
+                MediaType     = ''
+                PhysicalMediaType = ''
             }
         }
     }
@@ -969,7 +980,7 @@ function Get-SupportPrimaryNetworkAdapterState {
         }
     }
     catch {}
-    $connected = $Adapters | Where-Object { $_.Connected -and $_.IPAddresses.Count -gt 0 } | Select-Object -First 1
+    $connected = $Adapters | Where-Object { $_.Connected } | Select-Object -First 1
     if ($connected) { return $connected }
     $withGateway = $Adapters | Where-Object { $_.Enabled -and $_.Gateways.Count -gt 0 } | Select-Object -First 1
     if ($withGateway) { return $withGateway }
@@ -1006,29 +1017,122 @@ function Get-SupportWifiInfo {
     return $wifi
 }
 
-function Get-SupportProxyInfo {
-    $proxy = [pscustomobject]@{
-        Enabled  = $false
-        Server   = ''
-        Bypass   = ''
-        Summary  = '未启用代理'
+function Get-SupportWinHttpProxyInfo {
+    $result = [pscustomobject]@{
+        Enabled = $false
+        Server  = ''
+        Summary = '未检测到 WinHTTP 代理'
     }
     try {
-        $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-        $key = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-        if ($key -and $key.ProxyEnable -and ([int]$key.ProxyEnable -eq 1)) {
-            $proxy.Enabled = $true
-            $proxy.Server = [string]$key.ProxyServer
-            $proxy.Bypass = [string]$key.ProxyOverride
-            if ($proxy.Server) {
-                $proxy.Summary = ('已启用代理：' + $proxy.Server)
+        $output = @(& netsh.exe winhttp show proxy 2>&1 | ForEach-Object { [string]$_ })
+        if ($LASTEXITCODE -eq 0 -and $output.Count -gt 0) {
+            $text = ($output -join "`n").Trim()
+            if ($text -match '(?i)direct access|直接访问|无代理服务器|没有代理服务器') {
+                $result.Summary = 'WinHTTP：直接访问，未配置代理'
+                return $result
+            }
+            $proxyServer = ''
+            foreach ($line in $output) {
+                if ($line -match '(?i)(Proxy Server\(s\)|Proxy Server|代理服务器)\s*[：:]\s*(.+)$') {
+                    $proxyServer = $matches[2].Trim()
+                    break
+                }
+            }
+            $result.Enabled = $true
+            $result.Server = $proxyServer
+            if ($proxyServer) {
+                $result.Summary = 'WinHTTP 代理：' + $proxyServer
             }
             else {
-                $proxy.Summary = '已启用代理（未设置服务器）'
+                $result.Summary = '检测到 WinHTTP 代理配置'
             }
         }
     }
     catch {}
+    return $result
+}
+
+function Test-SupportVpnOrTunnelAdapter {
+    param($Adapter)
+    if (-not $Adapter) { return $false }
+    $mediaType = [string]$Adapter.MediaType
+    $physicalMediaType = [string]$Adapter.PhysicalMediaType
+    $description = [string]$Adapter.Description
+    if ($mediaType -match '(?i)tunnel|vpn') { return $true }
+    if ($physicalMediaType -match '(?i)tunnel') { return $true }
+    if ($description -match '(?i)\b(vpn|tun|tap)\b') { return $true }
+    return $false
+}
+
+function Get-SupportProxyInfo {
+    param($Adapters)
+    $proxy = [pscustomobject]@{
+        Enabled            = $false
+        Server             = ''
+        Bypass             = ''
+        AutoConfigUrl      = ''
+        Summary            = '未启用代理'
+        WinHttpEnabled     = $false
+        WinHttpServer      = ''
+        WinHttpSummary     = '未检测到 WinHTTP 代理'
+        VpnOrTunnelDetected = $false
+        VpnAdapterNames    = @()
+        AnyProxy           = $false
+    }
+    try {
+        $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        $key = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+        if ($key) {
+            $proxy.AutoConfigUrl = [string]$key.AutoConfigURL
+            if ($key.ProxyEnable -and ([int]$key.ProxyEnable -eq 1)) {
+                $proxy.Enabled = $true
+                $proxy.Server = [string]$key.ProxyServer
+                $proxy.Bypass = [string]$key.ProxyOverride
+            }
+            if ($proxy.AutoConfigUrl) {
+                $proxy.Enabled = $true
+            }
+        }
+    }
+    catch {}
+
+    $winHttp = Get-SupportWinHttpProxyInfo
+    $proxy.WinHttpEnabled = $winHttp.Enabled
+    $proxy.WinHttpServer = $winHttp.Server
+    $proxy.WinHttpSummary = $winHttp.Summary
+
+    if (-not $Adapters) {
+        try { $Adapters = @(Get-SupportNetworkAdapterState) } catch { $Adapters = @() }
+    }
+    $vpnNames = @()
+    foreach ($adapter in @($Adapters)) {
+        if (Test-SupportVpnOrTunnelAdapter $adapter) {
+            if ($adapter.Name) { $vpnNames += [string]$adapter.Name }
+        }
+    }
+    $vpnNames = @($vpnNames | Select-Object -Unique)
+    if ($vpnNames.Count -gt 0) {
+        $proxy.VpnOrTunnelDetected = $true
+        $proxy.VpnAdapterNames = @($vpnNames)
+    }
+
+    $proxy.AnyProxy = ($proxy.Enabled -or $proxy.WinHttpEnabled -or $proxy.VpnOrTunnelDetected)
+    $summaryParts = @()
+    if ($proxy.Enabled) {
+        if ($proxy.Server) { $summaryParts += ('系统代理：' + $proxy.Server) }
+        elseif ($proxy.AutoConfigUrl) { $summaryParts += ('系统代理自动配置：' + $proxy.AutoConfigUrl) }
+        else { $summaryParts += '系统代理：已启用（未设置服务器）' }
+    }
+    if ($proxy.WinHttpEnabled) {
+        if ($proxy.WinHttpServer) { $summaryParts += ('WinHTTP：' + $proxy.WinHttpServer) }
+        else { $summaryParts += 'WinHTTP：已配置代理' }
+    }
+    if ($proxy.VpnOrTunnelDetected) {
+        $summaryParts += ('VPN/TUN：' + ($vpnNames -join ', '))
+    }
+    if ($summaryParts.Count -gt 0) {
+        $proxy.Summary = ($summaryParts -join '；')
+    }
     return $proxy
 }
 
@@ -1325,26 +1429,162 @@ function Get-SupportPublicConnectivityResult {
     }
 }
 
+function Test-SupportHttpsViaSystemProxyDetailed {
+    param(
+        [string]$HostName = 'www.microsoft.com',
+        [int]$TimeoutMs = 8000,
+        $ProxyInfo
+    )
+    $oldSecurityProtocol = $null
+    try {
+        $oldSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
+        if ([enum]::GetNames([System.Net.SecurityProtocolType]) -contains 'Tls12') {
+            [System.Net.ServicePointManager]::SecurityProtocol = $oldSecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+        }
+    }
+    catch {}
+
+    try {
+        $request = [System.Net.HttpWebRequest]::Create(('https://' + $HostName + '/'))
+        $request.Method = 'HEAD'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        $request.AllowAutoRedirect = $true
+        $request.UserAgent = 'WinSupport-Toolkit/1.1'
+        $request.UseDefaultCredentials = $true
+        try {
+            $request.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
+            if ($ProxyInfo -and -not $ProxyInfo.Enabled -and $ProxyInfo.WinHttpServer -and $ProxyInfo.WinHttpServer -notmatch '[=;]') {
+                $proxyAddress = [string]$ProxyInfo.WinHttpServer
+                if ($proxyAddress -notmatch '^[a-z]+://') {
+                    $proxyAddress = 'http://' + $proxyAddress
+                }
+                $request.Proxy = New-Object System.Net.WebProxy($proxyAddress, $true)
+            }
+            if ($request.Proxy) {
+                $request.Proxy.Credentials = [System.Net.CredentialCache]::DefaultNetworkCredentials
+            }
+        }
+        catch {}
+
+        try {
+            $response = $request.GetResponse()
+            $statusCode = [int]$response.StatusCode
+            try { $response.Close() } catch {}
+            if ($statusCode -eq 407) {
+                return [pscustomobject]@{
+                    Success = $false
+                    Target  = $HostName
+                    Detail  = '代理服务器要求身份验证（HTTP 407）'
+                }
+            }
+            if ($statusCode -lt 500) {
+                return [pscustomobject]@{
+                    Success = $true
+                    Target  = $HostName
+                    Detail  = ('通过系统代理完成 HTTPS 请求（HTTP ' + $statusCode + '）')
+                }
+            }
+            return [pscustomobject]@{
+                Success = $false
+                Target  = $HostName
+                Detail  = ('代理 HTTPS 请求返回 HTTP ' + $statusCode)
+            }
+        }
+        catch [System.Net.WebException] {
+            $response = $_.Exception.Response
+            if ($response) {
+                $statusCode = [int]$response.StatusCode
+                try { $response.Close() } catch {}
+                if ($statusCode -ne 407 -and $statusCode -lt 500) {
+                    return [pscustomobject]@{
+                        Success = $true
+                        Target  = $HostName
+                        Detail  = ('通过系统代理完成 HTTPS 请求（HTTP ' + $statusCode + '）')
+                    }
+                }
+                return [pscustomobject]@{
+                    Success = $false
+                    Target  = $HostName
+                    Detail  = ('代理 HTTPS 请求失败（HTTP ' + $statusCode + '）')
+                }
+            }
+            return [pscustomobject]@{
+                Success = $false
+                Target  = $HostName
+                Detail  = $_.Exception.Message
+            }
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Success = $false
+            Target  = $HostName
+            Detail  = $_.Exception.Message
+        }
+    }
+    finally {
+        if ($oldSecurityProtocol -ne $null) {
+            try { [System.Net.ServicePointManager]::SecurityProtocol = $oldSecurityProtocol } catch {}
+        }
+    }
+}
+
 function Get-SupportHttpsConnectivityResult {
+    param($ProxyInfo)
     $targets = @('www.microsoft.com', 'www.baidu.com')
-    $lastError = ''
+    $lastDirectError = ''
     foreach ($target in $targets) {
         $result = Test-SupportHttpsConnectDetailed -HostName $target
         if ($result.Success) {
-            return $result
+            return [pscustomobject]@{
+                Success        = $true
+                Target         = $result.Target
+                Detail         = $result.Detail
+                Mode           = 'Direct'
+                DirectSuccess  = $true
+                ProxyAttempted = $false
+                ProxySuccess   = $false
+            }
         }
-        $lastError = $result.Detail
+        $lastDirectError = $result.Detail
+    }
+
+    $proxyAttempted = $false
+    $lastProxyError = ''
+    if ($ProxyInfo -and $ProxyInfo.AnyProxy) {
+        $proxyAttempted = $true
+        foreach ($target in $targets) {
+            $proxyResult = Test-SupportHttpsViaSystemProxyDetailed -HostName $target -ProxyInfo $ProxyInfo
+            if ($proxyResult.Success) {
+                return [pscustomobject]@{
+                    Success        = $true
+                    Target         = $proxyResult.Target
+                    Detail         = $proxyResult.Detail
+                    Mode           = 'SystemProxy'
+                    DirectSuccess  = $false
+                    ProxyAttempted = $true
+                    ProxySuccess   = $true
+                }
+            }
+            $lastProxyError = $proxyResult.Detail
+        }
     }
     return [pscustomobject]@{
-        Success = $false
-        Target  = ''
-        Detail  = $lastError
+        Success        = $false
+        Target         = ''
+        Detail         = if ($lastProxyError) { $lastProxyError } else { $lastDirectError }
+        Mode           = 'None'
+        DirectSuccess  = $false
+        ProxyAttempted = $proxyAttempted
+        ProxySuccess   = $false
     }
 }
 
 function Get-SupportNetworkEvidence {
     $adapters = @(Get-SupportNetworkAdapterState)
     $selectedAdapter = Get-SupportPrimaryNetworkAdapterState $adapters
+    $proxy = Get-SupportProxyInfo $adapters
     $gateway = ''
     if ($selectedAdapter -and $selectedAdapter.Gateways.Count -gt 0) {
         $gateway = [string]$selectedAdapter.Gateways[0]
@@ -1366,8 +1606,8 @@ function Get-SupportNetworkEvidence {
         GatewayPingOk      = $gatewayPingOk
         PublicConnectivity = Get-SupportPublicConnectivityResult
         Dns                = Test-SupportDnsResolutionDetailed
-        Https              = Get-SupportHttpsConnectivityResult
-        Proxy              = Get-SupportProxyInfo
+        Https              = Get-SupportHttpsConnectivityResult $proxy
+        Proxy              = $proxy
     }
 }
 
@@ -1399,7 +1639,7 @@ function ConvertTo-SupportNetworkDiagnosticResults {
         $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '主网络适配器已被禁用。' '启用该网络适配器后重新检测。' ''
     }
     elseif (-not $selected.Connected) {
-        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '网卡已启用，但没有建立有效网络连接。' '检查网线、Wi-Fi 开关、AP/交换机端口和网卡驱动。' 'RestartAdapter'
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '本地网络适配器已启用，但链路状态不是 Up。' '检查网线、Wi-Fi 开关、AP/交换机端口和网卡驱动。' 'RestartAdapter'
     }
     else {
         $results += New-SupportDiagnosticResult '网络' '网络适配器' 'PASS' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '' ''
@@ -1458,38 +1698,52 @@ function ConvertTo-SupportNetworkDiagnosticResults {
     }
 
     if ($Evidence.PublicConnectivity.Success) {
-        $results += New-SupportDiagnosticResult '网络' 'Internet' 'PASS' $Evidence.PublicConnectivity.Detail '' ''
+        $results += New-SupportDiagnosticResult '网络' '公网连通性' 'PASS' $Evidence.PublicConnectivity.Detail '' ''
+    }
+    elseif ($Evidence.Https.Success -and $Evidence.Https.Mode -eq 'SystemProxy') {
+        $results += New-SupportDiagnosticResult '网络' '公网连通性' 'INFO' '公网直连探测失败，但 HTTPS 已经通过系统代理访问成功' '代理环境会改变公网路径，直连探测结果不能用于判断网卡故障。' ''
+    }
+    elseif ($Evidence.Https.Success) {
+        $results += New-SupportDiagnosticResult '网络' '公网连通性' 'INFO' '公网直连 Ping/TCP 探测失败，但 HTTPS 应用层访问正常' 'Ping 和裸 TCP 探测可能被网络策略阻断，不足以判定网络故障。' ''
     }
     else {
-        $results += New-SupportDiagnosticResult '网络' 'Internet' 'FAIL' $Evidence.PublicConnectivity.Detail '设备可以配置 IPv4，但公网 IP 的 ICMP 和 TCP 443 均不可达。' '检查路由、防火墙、代理和上游网络，或联系网络管理员。' ''
+        $results += New-SupportDiagnosticResult '网络' '公网连通性' 'FAIL' $Evidence.PublicConnectivity.Detail '公网直连和 HTTPS 应用层访问均失败。' '检查路由、防火墙、代理和上游网络，或联系网络管理员。' ''
     }
 
     if ($Evidence.Dns.Success) {
         $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'PASS' $Evidence.Dns.Summary '' ''
     }
-    else {
-        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'FAIL' $Evidence.Dns.Summary '域名无法解析为 IP 地址，可能是 DNS 服务、DNS 配置或缓存异常。' '检查 DNS 服务器配置，或执行刷新 DNS 缓存后重新检测。' 'FlushDns'
-    }
-
-    if (-not $Evidence.PublicConnectivity.Success) {
-        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'INFO' '基础公网连接失败，未单独判断 HTTPS' '' ''
-    }
-    elseif (-not $Evidence.Dns.Success) {
-        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'INFO' 'DNS 解析失败，未单独判断 HTTPS' '' ''
+    elseif ($Evidence.Https.Success -and $Evidence.Https.Mode -eq 'SystemProxy') {
+        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'INFO' '本机直接 DNS 解析失败，但代理 HTTPS 访问正常' '域名解析可能由代理服务器或代理客户端完成，不能据此判定本地 DNS 或网卡故障。' ''
     }
     elseif ($Evidence.Https.Success) {
-        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'PASS' ($Evidence.Https.Target + '：' + $Evidence.Https.Detail) '' ''
+        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'WARNING' '本机直接 DNS 解析失败，但 HTTPS 应用层访问正常' '可能存在 DNS 缓存、分流或网络策略差异。' '如业务访问正常，可暂不修改 DNS；否则检查 DNS 服务器配置。' ''
     }
     else {
-        $diagnosis = '基础网络可达，但 TLS 或 HTTPS 端口连接失败。'
-        if ($Evidence.Proxy.Enabled) {
-            $diagnosis += ' 当前系统启用了代理：' + $Evidence.Proxy.Server
-        }
-        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'FAIL' $Evidence.Https.Detail $diagnosis '检查系统代理、防火墙、证书和企业网络策略。' ''
+        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'FAIL' $Evidence.Dns.Summary '域名无法解析为 IP 地址，且 HTTPS 应用层访问也失败。' '检查 DNS 服务器配置，或执行刷新 DNS 缓存后重新检测。' 'FlushDns'
     }
 
-    if ($Evidence.Proxy.Enabled) {
-        $results += New-SupportDiagnosticResult '网络' '代理设置' 'INFO' $Evidence.Proxy.Summary 'HTTPS 异常时，代理配置是常见原因。' '' ''
+    if ($Evidence.Https.Success) {
+        $httpsDiagnosis = ''
+        if ($Evidence.Https.Mode -eq 'SystemProxy') {
+            $httpsDiagnosis = 'HTTPS 通过 Windows 系统代理访问成功。'
+        }
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'PASS' ($Evidence.Https.Target + '：' + $Evidence.Https.Detail) $httpsDiagnosis '' '' $Evidence.Https.Mode
+    }
+    else {
+        $diagnosis = '直连和系统代理路径下的 HTTPS/TLS 访问均失败。'
+        if ($Evidence.Proxy.AnyProxy) {
+            $diagnosis = '检测到代理或 VPN/TUN 配置，但 HTTPS 应用层访问仍失败。'
+        }
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'FAIL' $Evidence.Https.Detail $diagnosis '检查系统代理、WinHTTP 代理、VPN/TUN、防火墙、证书和企业网络策略。' ''
+    }
+
+    if ($Evidence.Proxy.AnyProxy) {
+        $proxyDiagnosis = '检测到可能影响公网直连测试的代理或 VPN/TUN 配置。'
+        if ($Evidence.Https.Success -and $Evidence.Https.Mode -eq 'SystemProxy') {
+            $proxyDiagnosis = 'HTTPS 已通过代理成功访问，代理配置不会降低本地网络适配器状态。'
+        }
+        $results += New-SupportDiagnosticResult '网络' '代理设置' 'INFO' $Evidence.Proxy.Summary $proxyDiagnosis '' ''
     }
     return $results
 }
@@ -1512,9 +1766,10 @@ function Get-SupportNetworkDiagnosticSummary {
     $ipFail = @($Results | Where-Object { $_.Name -eq 'IP 配置' -and $_.Status -eq 'FAIL' }).Count -gt 0
     $gateway = $Results | Where-Object { $_.Name -eq '默认网关' } | Select-Object -First 1
     $gatewayConnectivity = $Results | Where-Object { $_.Name -eq '网关连通性' } | Select-Object -First 1
-    $internet = $Results | Where-Object { $_.Name -eq 'Internet' } | Select-Object -First 1
+    $publicConnectivity = $Results | Where-Object { $_.Name -eq '公网连通性' } | Select-Object -First 1
     $dns = $Results | Where-Object { $_.Name -eq 'DNS 解析' } | Select-Object -First 1
     $https = $Results | Where-Object { $_.Name -eq 'HTTPS 访问' } | Select-Object -First 1
+    $proxy = $Results | Where-Object { $_.Name -eq '代理设置' } | Select-Object -First 1
 
     $primaryDiagnosis = '网络连接正常，未发现需要优先处理的问题。'
     $recommendation = ''
@@ -1526,20 +1781,45 @@ function Get-SupportNetworkDiagnosticSummary {
         $primaryDiagnosis = '设备当前没有获得有效 IPv4 地址。'
         $recommendation = '检查 DHCP、网线/Wi-Fi 连接，或尝试重新获取 IP。'
     }
-    elseif ($internet -and $internet.Status -eq 'FAIL') {
-        $primaryDiagnosis = '本机已获得 IP，但无法访问公网。'
+    elseif ($https -and $https.Status -eq 'PASS' -and $https.AccessMode -eq 'SystemProxy') {
+        $primaryDiagnosis = '本地网络适配器工作正常，检测到代理配置，公网直连测试可能受到代理影响；当前 HTTPS 网络访问正常。'
+        $recommendation = '无需调整网卡；如需排查代理问题，请检查 Windows 系统代理和 WinHTTP 代理配置。'
+    }
+    elseif ($https -and $https.Status -eq 'PASS' -and $publicConnectivity -and $publicConnectivity.Status -eq 'INFO') {
+        $primaryDiagnosis = '本地网络适配器工作正常；公网直连探测失败，但 HTTPS 应用层访问正常，不能据此判定网络故障。'
+        $recommendation = '检查网络策略或代理配置是否限制 Ping/裸 TCP；优先以实际 HTTPS 访问结果为准。'
+    }
+    elseif ($publicConnectivity -and $publicConnectivity.Status -eq 'FAIL' -and $dns -and $dns.Status -eq 'FAIL') {
+        $primaryDiagnosis = '本地适配器已获得 IP，但公网连通性和 DNS 解析均失败。'
         if ($gatewayConnectivity -and $gatewayConnectivity.Status -eq 'WARNING') {
             $primaryDiagnosis += ' 默认网关也未响应探测。'
         }
-        $recommendation = '优先检查局域网连接、交换机/AP、网关和相关防火墙配置。'
+        if ($proxy) {
+            $primaryDiagnosis += ' 已检测到代理或 VPN/TUN 配置，需要同时排除代理服务不可用。'
+        }
+        $recommendation = '检查局域网、路由、网关、代理服务和上游网络。'
     }
-    elseif ($internet -and $internet.Status -eq 'PASS' -and $dns -and $dns.Status -eq 'FAIL') {
-        $primaryDiagnosis = '互联网连接正常，但 DNS 解析异常。'
+    elseif ($publicConnectivity -and $publicConnectivity.Status -eq 'FAIL') {
+        $primaryDiagnosis = '本地网络适配器状态正常，但公网访问失败。'
+        if ($proxy) {
+            $primaryDiagnosis += ' 已检测到代理或 VPN/TUN 配置，不能据此判定网卡故障。'
+            $recommendation = '检查代理服务器、WinHTTP 代理、VPN/TUN 状态和上游网络。'
+        }
+        else {
+            $recommendation = '检查路由、防火墙和上游网络，或联系网络管理员。'
+        }
+    }
+    elseif ($dns -and $dns.Status -eq 'FAIL') {
+        $primaryDiagnosis = '本地网络和公网访问正常，但 DNS 解析异常。'
         $recommendation = '检查 DNS 服务器配置，或执行刷新 DNS 缓存。'
     }
-    elseif ($internet -and $internet.Status -eq 'PASS' -and $dns -and $dns.Status -eq 'PASS' -and $https -and $https.Status -eq 'FAIL') {
-        $primaryDiagnosis = '基础网络连通，但 HTTPS 访问异常。'
-        $recommendation = '检查代理、防火墙、证书或企业网络策略。'
+    elseif ($dns -and $dns.Status -eq 'WARNING' -and $https -and $https.Status -eq 'PASS') {
+        $primaryDiagnosis = '本地网络适配器工作正常；直接 DNS 测试异常，但 HTTPS 应用层访问正常。'
+        $recommendation = '如业务访问正常，可暂不修改 DNS；持续异常时检查 DNS 分流、缓存和企业网络策略。'
+    }
+    elseif ($https -and $https.Status -eq 'FAIL') {
+        $primaryDiagnosis = '本地网络适配器工作正常，但 HTTPS 应用层访问失败。'
+        $recommendation = '检查系统代理、WinHTTP 代理、VPN/TUN、防火墙、证书和企业网络策略。'
     }
     elseif ($gatewayConnectivity -and $gatewayConnectivity.Status -eq 'WARNING') {
         $primaryDiagnosis = '网络可用，但默认网关未响应 Ping。'
@@ -1548,6 +1828,10 @@ function Get-SupportNetworkDiagnosticSummary {
     elseif ($gateway -and $gateway.Status -eq 'FAIL') {
         $primaryDiagnosis = '网络已连接但没有有效的默认网关。'
         $recommendation = '重新获取 IP；如为静态配置，请检查网关地址。'
+    }
+    elseif ($proxy) {
+        $primaryDiagnosis = '本地网络访问正常，检测到代理配置；本地网络适配器工作正常。'
+        $recommendation = '如代理业务异常，请检查 Windows 系统代理和 WinHTTP 代理设置。'
     }
 
     return [pscustomobject]@{
@@ -3404,7 +3688,7 @@ function Get-SupportIssueSuggestion {
     switch -Regex ($Check) {
         'DNS' { return 'DNS 解析可能存在异常。建议进入「网络 -> 网络诊断」执行刷新 DNS，或检查 DNS 设置。' }
         'HTTPS' { return 'HTTPS 连接失败，建议进入「网络 -> 网络诊断」检查代理、防火墙和证书。' }
-        'Internet' { return '无法访问公网，建议进入「网络 -> 网络诊断」进一步检查。' }
+        'Internet|公网连通性' { return '公网访问存在异常，建议进入「网络 -> 网络诊断」进一步检查。' }
         '默认网关|网关连通性' { return '默认网关存在异常，建议进入「网络 -> 网络诊断」检查局域网和网关配置。' }
         'IP 配置' { return '本机没有有效 IP，建议检查网线/Wi-Fi 连接后重新获取 IP。' }
         '网络适配器' { return '网络适配器异常，请检查硬件或驱动。' }
