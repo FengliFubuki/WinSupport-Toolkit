@@ -4315,6 +4315,39 @@ function Test-SupportCategoryHasRepair {
     }
 }
 
+function Show-SupportNetworkTechnicalDetails {
+    Write-SupportUiHeader '网络技术详情'
+    Write-Host '适配器：' -ForegroundColor Cyan
+    try {
+        $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue |
+            Select-Object Name, InterfaceIndex, Status, MacAddress, InterfaceDescription, MediaType)
+        if ($adapters.Count -gt 0) {
+            $adapters | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+        }
+        else {
+            Write-Host '未获取到适配器信息。' -ForegroundColor Gray
+        }
+    }
+    catch {
+        Write-Host ('适配器信息读取失败：' + $_.Exception.Message) -ForegroundColor Yellow
+    }
+    Write-Host '默认路由：' -ForegroundColor Cyan
+    try {
+        $routes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            Select-Object ifIndex, NextHop, RouteMetric, InterfaceMetric)
+        if ($routes.Count -gt 0) {
+            $routes | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+        }
+        else {
+            Write-Host '未获取到默认路由。' -ForegroundColor Gray
+        }
+    }
+    catch {
+        Write-Host ('默认路由读取失败：' + $_.Exception.Message) -ForegroundColor Yellow
+    }
+    Write-PressAnyKeyToReturn
+}
+
 function Show-SupportCategoryDetail {
     param([string]$Category)
     while ($true) {
@@ -4388,8 +4421,8 @@ function Show-SupportCategoryDetail {
                     Write-Host ''
                 }
                 if ($Category -eq '网络') {
-                    Write-Host '当前缓存未保存 InterfaceIndex / RouteMetric / InterfaceMetric。' -ForegroundColor Gray
-                    Write-Host '网络信息页面可查看当前适配器和 IP 配置。' -ForegroundColor Gray
+                    Show-SupportNetworkTechnicalDetails
+                    continue
                 }
                 Write-PressAnyKeyToReturn
                 continue
