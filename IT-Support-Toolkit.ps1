@@ -3988,21 +3988,174 @@ function Write-SupportUiHeader {
     Write-Host ''
 }
 
+function Get-SupportUiCategory {
+    param($Result)
+    switch ([string]$Result.Category) {
+        '网络' { return '网络' }
+        '磁盘' { return '磁盘' }
+        '打印机' { return '打印机' }
+        '系统' { return '系统' }
+        '电脑' {
+            if ($Result.Name -eq 'Windows 系统') { return 'Windows' }
+            return '设备'
+        }
+        default {
+            if ($Result.Name -match 'Windows') { return 'Windows' }
+            return '设备'
+        }
+    }
+}
+
+function Get-SupportUiItemStatus {
+    param($Result)
+    switch ([string]$Result.Status) {
+        'FAIL' { return '问题' }
+        'WARNING' { return '注意' }
+        'PASS' { return '正常' }
+        'INFO' {
+            if ($Result.Name -eq '代理设置') { return '注意' }
+            return '正常'
+        }
+        default { return '未检测' }
+    }
+}
+
+function Get-SupportUiStatusColor {
+    param([string]$Status)
+    switch ($Status) {
+        '正常' { return 'Green' }
+        '注意' { return 'Yellow' }
+        '问题' { return 'Red' }
+        default { return 'Gray' }
+    }
+}
+
+function Get-SupportUiCategoryStatus {
+    param($Results)
+    $items = @($Results)
+    if ($items.Count -eq 0) { return '未检测' }
+    if (@($items | Where-Object { $_.Status -eq 'FAIL' }).Count -gt 0) { return '问题' }
+    if (@($items | Where-Object { $_.Status -eq 'WARNING' }).Count -gt 0) { return '注意' }
+    return '正常'
+}
+
+function New-SupportDiagnosticSession {
+    param($Results)
+    $allResults = @($Results)
+    $categories = @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')
+    $categoryStatuses = [ordered]@{}
+    foreach ($category in $categories) {
+        $categoryResults = @($allResults | Where-Object { (Get-SupportUiCategory $_) -eq $category })
+        $categoryStatuses[$category] = Get-SupportUiCategoryStatus $categoryResults
+    }
+
+    $overallStatus = '正常'
+    if (@($categoryStatuses.Values | Where-Object { $_ -eq '问题' }).Count -gt 0) {
+        $overallStatus = '问题'
+    }
+    elseif (@($categoryStatuses.Values | Where-Object { $_ -eq '注意' }).Count -gt 0) {
+        $overallStatus = '注意'
+    }
+    elseif (@($categoryStatuses.Values | Where-Object { $_ -ne '未检测' }).Count -eq 0) {
+        $overallStatus = '未检测'
+    }
+
+    return [pscustomobject]@{
+        Results          = @($allResults)
+        GeneratedAt      = Get-Date
+        OverallStatus    = $overallStatus
+        CategoryStatuses = $categoryStatuses
+        ProblemCount     = @($allResults | Where-Object { $_.Status -eq 'FAIL' }).Count
+        AttentionCount   = @($allResults | Where-Object { $_.Status -eq 'WARNING' }).Count
+    }
+}
+
+function Set-SupportDiagnosticSession {
+    param($Results)
+    $script:DiagnosticSession = New-SupportDiagnosticSession $Results
+    return $script:DiagnosticSession
+}
+
+function Get-SupportSessionCategoryResults {
+    param([string]$Category)
+    if (-not $script:DiagnosticSession) { return @() }
+    if ($script:DiagnosticSession.CategoryStatuses.Contains($Category)) {
+        return @($script:DiagnosticSession.Results | Where-Object { (Get-SupportUiCategory $_) -eq $Category })
+    }
+    return @()
+}
+
+function Write-SupportDashboardStatus {
+    param(
+        [string]$Label,
+        [string]$Status
+    )
+    $padding = 10 - $Label.Length
+    if ($padding -lt 1) { $padding = 1 }
+    Write-Host ($Label + (' ' * $padding) + '[' + $Status + ']') -ForegroundColor (Get-SupportUiStatusColor $Status)
+}
+
 function Show-SupportDashboard {
     while ($true) {
         Write-SupportUiHeader '总览'
-        Write-Host '[未检测] 尚未完成全面诊断' -ForegroundColor Gray
+        if (-not $script:DiagnosticSession) {
+            Write-Host '[未检测] 尚未完成全面诊断' -ForegroundColor Gray
+            Write-Host ''
+            Write-Host '最近检查：未检测' -ForegroundColor Gray
+            Write-Host ''
+            Write-SupportDashboardStatus '网络' '未检测'
+            Write-SupportDashboardStatus '系统' '未检测'
+            Write-SupportDashboardStatus '磁盘' '未检测'
+            Write-SupportDashboardStatus 'Windows' '未检测'
+            Write-SupportDashboardStatus '打印机' '未检测'
+            Write-SupportDashboardStatus '设备' '未检测'
+            Write-Host ''
+            Write-Host '[1] 开始全面诊断'
+            Write-Host '[0] 返回'
+            Write-Host ''
+            $choice = Read-MenuSelection 1
+            switch ($choice) {
+                1 {
+                    Write-Host ''
+                    Write-Host '全面诊断将在下一阶段接入。' -ForegroundColor Yellow
+                    Write-PressAnyKeyToReturn
+                }
+                0 { return }
+            }
+            continue
+        }
+
+        $session = $script:DiagnosticSession
+        Write-Host ('[' + $session.OverallStatus + '] 电脑状态') -ForegroundColor (Get-SupportUiStatusColor $session.OverallStatus)
+        Write-Host ('最近检查：' + $session.GeneratedAt.ToString('HH:mm')) -ForegroundColor Gray
+        if ($session.ProblemCount -gt 0 -or $session.AttentionCount -gt 0) {
+            Write-Host ('问题 ' + $session.ProblemCount + ' 项，注意 ' + $session.AttentionCount + ' 项') -ForegroundColor Gray
+        }
         Write-Host ''
-        Write-Host '运行全面诊断后，这里会显示电脑的总体状态和各分类结果。' -ForegroundColor Gray
+        foreach ($category in @('网络', '系统', '磁盘', 'Windows', '打印机', '设备')) {
+            Write-SupportDashboardStatus $category ([string]$session.CategoryStatuses[$category])
+        }
         Write-Host ''
-        Write-Host '[1] 开始全面诊断'
+        Write-Host '[1] 查看本次结果'
+        Write-Host '[2] 重新全面诊断'
+        Write-Host '[3] 查看分类详情'
         Write-Host '[0] 返回'
         Write-Host ''
-        $choice = Read-MenuSelection 1
+        $choice = Read-MenuSelection 3
         switch ($choice) {
             1 {
                 Write-Host ''
+                Write-Host '本次结果页面将在下一阶段接入。' -ForegroundColor Yellow
+                Write-PressAnyKeyToReturn
+            }
+            2 {
+                Write-Host ''
                 Write-Host '全面诊断将在下一阶段接入。' -ForegroundColor Yellow
+                Write-PressAnyKeyToReturn
+            }
+            3 {
+                Write-Host ''
+                Write-Host '分类详细页面将在后续阶段接入。' -ForegroundColor Yellow
                 Write-PressAnyKeyToReturn
             }
             0 { return }

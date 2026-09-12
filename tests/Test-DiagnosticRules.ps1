@@ -172,6 +172,11 @@ Assert-Equal 'PASS' (Get-TestStatus $normalResults 'IP 配置') '正常网络：
 Assert-Equal 'PASS' (Get-TestStatus $normalResults 'DNS 解析') '正常网络：DNS 通过'
 Assert-Equal 'PASS' (Get-TestStatus $normalResults 'HTTPS 访问') '正常网络：HTTPS 通过'
 Assert-Equal $true $normalSummary.IsHealthy '正常网络：诊断汇总无问题'
+Assert-Equal '网络' (Get-SupportUiCategory $normalResults[0]) 'UI 聚合：网络分类正确'
+Assert-Equal '正常' (Get-SupportUiItemStatus $normalResults[0]) 'UI 聚合：PASS 映射为正常'
+$normalSession = New-SupportDiagnosticSession $normalResults
+Assert-Equal '正常' $normalSession.CategoryStatuses['网络'] 'UI 聚合：网络会话状态正确'
+Assert-Equal '未检测' $normalSession.CategoryStatuses['系统'] 'UI 聚合：无结果分类为未检测'
 $tunnelAdapter = New-TestAdapter -Name 'Test Tunnel' -MediaType 'Tunnel' -IsVirtual $true
 Assert-Equal $true (Test-SupportVpnOrTunnelAdapter $tunnelAdapter) 'VPN/TUN：按接口类型识别'
 
