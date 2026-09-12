@@ -40,6 +40,7 @@ $script:IsWindowsOs = $false
 $script:IsAdminUser = $false
 $script:HasWinget   = $false
 $script:CommonSoftwareCache = $null
+$script:DiagnosticSession = $null
 
 # ===========================================================================
 # 基础工具函数
@@ -3972,6 +3973,143 @@ function Show-ReportMenu {
 }
 
 # ===========================================================================
+# V1.1 UI 页面
+# ===========================================================================
+
+function Write-SupportUiHeader {
+    param([string]$CurrentPage)
+    Clear-Host -ErrorAction SilentlyContinue
+    Write-Host ''
+    Write-Host '============================================================' -ForegroundColor DarkCyan
+    Write-Host ' WinSupport Toolkit' -ForegroundColor Cyan
+    Write-Host ' [1] 总览   [2] 工具箱   [3] 报告   [0] 退出' -ForegroundColor DarkGray
+    Write-Host (' 当前页面：' + $CurrentPage) -ForegroundColor Gray
+    Write-Host '============================================================' -ForegroundColor DarkCyan
+    Write-Host ''
+}
+
+function Show-SupportDashboard {
+    while ($true) {
+        Write-SupportUiHeader '总览'
+        Write-Host '[未检测] 尚未完成全面诊断' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host '运行全面诊断后，这里会显示电脑的总体状态和各分类结果。' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host '[1] 开始全面诊断'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 1
+        switch ($choice) {
+            1 {
+                Write-Host ''
+                Write-Host '全面诊断将在下一阶段接入。' -ForegroundColor Yellow
+                Write-PressAnyKeyToReturn
+            }
+            0 { return }
+        }
+    }
+}
+
+function Show-SupportToolbox {
+    while ($true) {
+        Write-SupportUiHeader '工具箱'
+        Write-Host '[1] 网络'
+        Write-Host '[2] 打印机'
+        Write-Host '[3] 系统'
+        Write-Host '[4] 磁盘'
+        Write-Host '[5] 软件'
+        Write-Host '[6] 设备'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 6
+        Write-Host ''
+        switch ($choice) {
+            1 { Show-NetworkMenu }
+            2 { Show-PrinterMenu }
+            3 { Show-SystemRepairMenu }
+            4 { Show-DiskMenu }
+            5 { Show-SoftwareMenu }
+            6 {
+                Show-SupportComputerInfo
+                Write-PressAnyKeyToReturn
+            }
+            0 { return }
+        }
+    }
+}
+
+function Show-SupportReportCenter {
+    while ($true) {
+        Write-SupportUiHeader '报告'
+        Write-Host '[1] 本次诊断结果'
+        Write-Host '[2] 历史报告'
+        Write-Host '[3] 导出报告'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 3
+        Write-Host ''
+        switch ($choice) {
+            1 {
+                if (-not $script:DiagnosticSession) {
+                    Write-WarnText '当前没有本次诊断结果。'
+                }
+                else {
+                    Write-Host ('最近检查：' + $script:DiagnosticSession.GeneratedAt) -ForegroundColor Gray
+                    Write-Host '详细结果页将在后续阶段接入。' -ForegroundColor Yellow
+                }
+                Write-PressAnyKeyToReturn
+            }
+            2 {
+                Write-SubTitle '历史报告'
+                if (-not (Test-SupportPathExists $script:ReportDir)) {
+                    Write-NoticeText '报告目录尚不存在。'
+                }
+                else {
+                    $reports = @(Get-ChildItem -LiteralPath $script:ReportDir -File -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime -Descending)
+                    if ($reports.Count -eq 0) {
+                        Write-NoticeText '暂无历史报告。'
+                    }
+                    else {
+                        foreach ($report in $reports) {
+                            Write-Host ('- ' + $report.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') + '  ' + $report.Name)
+                        }
+                        Write-Host ''
+                        Write-NoticeText ('报告目录：' + $script:ReportDir)
+                    }
+                }
+                Write-PressAnyKeyToReturn
+            }
+            3 { Show-ReportMenu }
+            0 { return }
+        }
+    }
+}
+
+function Show-SupportMainMenu {
+    while ($true) {
+        Write-SupportUiHeader '主菜单'
+        Write-Host '[1] 总览'
+        Write-Host '[2] 工具箱'
+        Write-Host '[3] 报告'
+        Write-Host '[0] 退出'
+        Write-Host ''
+        $choice = Read-MenuSelection 3
+        switch ($choice) {
+            1 { Show-SupportDashboard }
+            2 { Show-SupportToolbox }
+            3 { Show-SupportReportCenter }
+            0 {
+                Write-Host ''
+                Write-Host '感谢使用 WinSupport Toolkit。' -ForegroundColor Green
+                Write-Log '工具退出'
+                exit 0
+            }
+        }
+    }
+}
+
+# ===========================================================================
 # 启动与主菜单
 # ===========================================================================
 
@@ -4067,5 +4205,5 @@ function Show-MainMenu {
 
 if ($MyInvocation.InvocationName -ne '.') {
     Initialize-Toolkit
-    Show-MainMenu
+    Show-SupportMainMenu
 }
