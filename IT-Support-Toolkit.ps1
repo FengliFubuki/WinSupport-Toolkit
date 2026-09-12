@@ -3772,8 +3772,14 @@ function Invoke-OneClickCheck {
 # ===========================================================================
 
 function New-SupportReportSnapshot {
+    param($DetectionResults)
     $computer = Get-SupportComputerFacts
-    $detection = @(Get-SupportDetectionAll)
+    if ($null -ne $DetectionResults) {
+        $detection = @($DetectionResults)
+    }
+    else {
+        $detection = @(Get-SupportDetectionAll)
+    }
     $disks = @(Get-SupportDiskInfo)
     $battery = Get-SupportBattery
     $printers = @(Get-SupportPrinters)
@@ -4681,6 +4687,60 @@ function Show-SupportToolbox {
     }
 }
 
+function Show-SupportSessionReportExport {
+    if (-not $script:DiagnosticSession) {
+        Write-WarnText '当前没有本次诊断结果。'
+        Write-PressAnyKeyToReturn
+        return
+    }
+    while ($true) {
+        Write-SupportUiHeader '导出本次诊断'
+        Write-Host '[1] 导出 TXT'
+        Write-Host '[2] 导出 JSON'
+        Write-Host '[3] 导出 TXT + JSON'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 3
+        if ($choice -eq 0) { return }
+
+        Write-Host ''
+        Write-Host '正在生成报告...' -ForegroundColor Gray
+        $snapshot = New-SupportReportSnapshot -DetectionResults $script:DiagnosticSession.Results
+        try {
+            if (-not (Test-SupportPathExists $script:ReportDir)) {
+                New-Item -ItemType Directory -Path $script:ReportDir -Force -ErrorAction Stop | Out-Null
+            }
+        }
+        catch {
+            Write-ErrorText ('无法创建报告目录：' + $_.Exception.Message)
+            Write-PressAnyKeyToReturn
+            continue
+        }
+
+        $stamp = Get-SupportTimeStamp
+        $exported = @()
+        if ($choice -eq 1 -or $choice -eq 3) {
+            $path = Export-SupportReportTxt ('ITSupportReport_' + $stamp + '.txt') $snapshot
+            if ($path) { $exported += $path }
+        }
+        if ($choice -eq 2 -or $choice -eq 3) {
+            $path = Export-SupportReportJson ('ITSupportReport_' + $stamp + '.json') $snapshot
+            if ($path) { $exported += $path }
+        }
+        Write-Host ''
+        if ($exported.Count -gt 0) {
+            Write-OkText '报告导出成功：'
+            foreach ($path in $exported) {
+                Write-Host ('  ' + $path) -ForegroundColor Green
+            }
+        }
+        else {
+            Write-ErrorText '报告导出失败，请查看日志。'
+        }
+        Write-PressAnyKeyToReturn
+    }
+}
+
 function Show-SupportReportCenter {
     while ($true) {
         Write-SupportUiHeader '报告'
@@ -4697,8 +4757,8 @@ function Show-SupportReportCenter {
                     Write-WarnText '当前没有本次诊断结果。'
                 }
                 else {
-                    Write-Host ('最近检查：' + $script:DiagnosticSession.GeneratedAt) -ForegroundColor Gray
-                    Write-Host '详细结果页将在后续阶段接入。' -ForegroundColor Yellow
+                    Show-SupportFullDiagnosisResult $script:DiagnosticSession
+                    continue
                 }
                 Write-PressAnyKeyToReturn
             }
@@ -4723,7 +4783,7 @@ function Show-SupportReportCenter {
                 }
                 Write-PressAnyKeyToReturn
             }
-            3 { Show-ReportMenu }
+            3 { Show-SupportSessionReportExport }
             0 { return }
         }
     }
