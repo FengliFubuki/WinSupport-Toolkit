@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Windows IT Support Toolkit V1.0
+title Windows IT Support Toolkit V1.1
 cd /d "%~dp0"
 
 where pwsh.exe >nul 2>nul

@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 ============================================================================
-  Windows IT Support Toolkit V1.0
+  Windows IT Support Toolkit V1.1
 --------------------------------------------------------------------------
   用途：面向 IT Support / Desktop Support 的日常运维辅助工具
   运行要求：Windows 10 / Windows 11（需 Windows PowerShell 5.1+）
@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = 'Continue'
 
 $script:ToolName    = 'Windows IT Support Toolkit'
-$script:ToolVersion = '1.0'
+$script:ToolVersion = '1.1.0'
 $script:ScriptRoot  = $PSScriptRoot
 if (-not $script:ScriptRoot) {
     try {
@@ -77,7 +77,7 @@ function Write-Banner {
     Write-Host ''
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '       Windows IT Support Toolkit' -ForegroundColor Cyan
-    Write-Host '       V1.0 - IT Support 日常运维工具' -ForegroundColor Cyan
+    Write-Host '       V1.1 - IT Support 诊断与运维工具' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host ''
 }
@@ -288,6 +288,72 @@ function New-SupportReportObject {
         Status   = $Status
         Message  = $Message
     }
+}
+
+function ConvertTo-SupportDiagnosticStatus {
+    param([string]$Status)
+    switch -Regex ($Status) {
+        '^(?i:PASS|正常)$' { return 'PASS' }
+        '^(?i:WARNING|警告)$' { return 'WARNING' }
+        '^(?i:FAIL|异常)$' { return 'FAIL' }
+        '^(?i:INFO|提示|信息)$' { return 'INFO' }
+        default { return 'INFO' }
+    }
+}
+
+function Get-SupportLegacyStatusText {
+    param([string]$Status)
+    switch (ConvertTo-SupportDiagnosticStatus $Status) {
+        'PASS' { return '正常' }
+        'WARNING' { return '警告' }
+        'FAIL' { return '异常' }
+        default { return '提示' }
+    }
+}
+
+function Get-SupportStatusColor {
+    param([string]$Status)
+    switch (ConvertTo-SupportDiagnosticStatus $Status) {
+        'PASS' { return 'Green' }
+        'WARNING' { return 'Yellow' }
+        'FAIL' { return 'Red' }
+        default { return 'Gray' }
+    }
+}
+
+function New-SupportDiagnosticResult {
+    param(
+        [string]$Category,
+        [string]$Name,
+        [string]$Status,
+        [string]$Result,
+        [string]$Diagnosis = '',
+        [string]$Recommendation = '',
+        [string]$ActionCode = ''
+    )
+    $normalizedStatus = ConvertTo-SupportDiagnosticStatus $Status
+    return [pscustomobject]@{
+        Kind           = '诊断'
+        Category       = $Category
+        Check          = $Name
+        Name           = $Name
+        Status         = $normalizedStatus
+        Message        = $Result
+        Result         = $Result
+        Diagnosis      = $Diagnosis
+        Recommendation = $Recommendation
+        ActionCode     = $ActionCode
+    }
+}
+
+function Convert-SupportReportObjectToDiagnostic {
+    param($ReportObject)
+    $status = ConvertTo-SupportDiagnosticStatus $ReportObject.Status
+    $recommendation = ''
+    if ($status -eq 'FAIL' -or $status -eq 'WARNING') {
+        $recommendation = Get-SupportIssueSuggestion $ReportObject.Check
+    }
+    return New-SupportDiagnosticResult $ReportObject.Category $ReportObject.Check $status $ReportObject.Message '' $recommendation
 }
 
 # ===========================================================================
@@ -692,6 +758,224 @@ function Get-SupportNetworkAdapterInfo {
     return $result
 }
 
+function Get-SupportNetConnectionStatusText {
+    param([int]$Status)
+    switch ($Status) {
+        0 { return '已断开' }
+        1 { return '正在连接' }
+        2 { return '已连接' }
+        3 { return '正在断开' }
+        4 { return '硬件不存在' }
+        5 { return '已禁用' }
+        6 { return '硬件故障' }
+        7 { return '媒体已断开' }
+        8 { return '正在验证' }
+        9 { return '验证成功' }
+        10 { return '验证失败' }
+        11 { return '地址无效' }
+        12 { return '需要凭据' }
+        default { return '状态未知' }
+    }
+}
+
+function Get-SupportNetworkAdapterState {
+    $result = @()
+    $configByIndex = @{}
+    try {
+        $configs = @(Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -ErrorAction SilentlyContinue)
+        foreach ($cfg in $configs) {
+            $configByIndex[[int]$cfg.Index] = $cfg
+        }
+    }
+    catch {}
+
+    try {
+        $netAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
+        if ($netAdapters.Count -gt 0) {
+            foreach ($na in $netAdapters) {
+                if ($na.Name -match '(?i)^loopback') { continue }
+                $cfg = $null
+                try {
+                    if ($configByIndex.ContainsKey([int]$na.InterfaceIndex)) {
+                        $cfg = $configByIndex[[int]$na.InterfaceIndex]
+                    }
+                }
+                catch {}
+
+                $ipv4List = @()
+                $maskList = @()
+                $gwList = @()
+                $dnsList = @()
+                $dhcpEnabled = $false
+                if ($cfg) {
+                    if ($cfg.IPAddress) {
+                        $ipArray = @($cfg.IPAddress)
+                        $maskArray = @($cfg.IPSubnet)
+                        for ($i = 0; $i -lt $ipArray.Count; $i++) {
+                            $ip = [string]$ipArray[$i]
+                            if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') {
+                                $ipv4List += $ip
+                                if ($i -lt $maskArray.Count) { $maskList += [string]$maskArray[$i] }
+                                else { $maskList += '' }
+                            }
+                        }
+                    }
+                    if ($cfg.DefaultIPGateway) {
+                        foreach ($gw in @($cfg.DefaultIPGateway)) {
+                            if ($gw -and ($gw -notmatch ':')) { $gwList += [string]$gw }
+                        }
+                    }
+                    if ($cfg.DNSServerSearchOrder) {
+                        foreach ($dns in @($cfg.DNSServerSearchOrder)) {
+                            if ($dns) { $dnsList += [string]$dns }
+                        }
+                    }
+                    $dhcpEnabled = [bool]$cfg.DHCPEnabled
+                }
+
+                $enabled = ($na.Status -ne 'Disabled')
+                $connected = ($na.Status -eq 'Up' -and $ipv4List.Count -gt 0)
+                $statusText = [string]$na.Status
+                if ($statusText -eq 'Up') { $statusText = '已连接' }
+                elseif ($statusText -eq 'Disconnected') { $statusText = '已断开' }
+                elseif ($statusText -eq 'Disabled') { $statusText = '已禁用' }
+                elseif ($statusText -eq 'Not Present') { $statusText = '不存在' }
+
+                $result += [pscustomobject]@{
+                    Index         = [int]$na.InterfaceIndex
+                    Name          = $na.Name
+                    Description   = $na.InterfaceDescription
+                    Status        = $statusText
+                    Enabled       = $enabled
+                    Connected     = $connected
+                    MacAddress    = $na.MacAddress
+                    DhcpEnabled   = $dhcpEnabled
+                    IPAddresses   = @($ipv4List)
+                    SubnetMasks   = @($maskList)
+                    Gateways      = @($gwList)
+                    DnsServers    = @($dnsList)
+                    Source        = 'Get-NetAdapter'
+                }
+            }
+            return $result
+        }
+    }
+    catch {}
+
+    try {
+        $cimAdapters = @(Get-CimInstance -ClassName Win32_NetworkAdapter -ErrorAction SilentlyContinue | Where-Object {
+            $_.PhysicalAdapter -or $_.NetConnectionID
+        })
+        foreach ($na in $cimAdapters) {
+            if ($na.Name -match '(?i)loopback') { continue }
+            $cfg = $null
+            try {
+                if ($configByIndex.ContainsKey([int]$na.Index)) {
+                    $cfg = $configByIndex[[int]$na.Index]
+                }
+            }
+            catch {}
+
+            $ipv4List = @()
+            $maskList = @()
+            $gwList = @()
+            $dnsList = @()
+            $dhcpEnabled = $false
+            if ($cfg) {
+                if ($cfg.IPAddress) {
+                    $ipArray = @($cfg.IPAddress)
+                    $maskArray = @($cfg.IPSubnet)
+                    for ($i = 0; $i -lt $ipArray.Count; $i++) {
+                        $ip = [string]$ipArray[$i]
+                        if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') {
+                            $ipv4List += $ip
+                            if ($i -lt $maskArray.Count) { $maskList += [string]$maskArray[$i] }
+                            else { $maskList += '' }
+                        }
+                    }
+                }
+                if ($cfg.DefaultIPGateway) {
+                    foreach ($gw in @($cfg.DefaultIPGateway)) {
+                        if ($gw -and ($gw -notmatch ':')) { $gwList += [string]$gw }
+                    }
+                }
+                if ($cfg.DNSServerSearchOrder) {
+                    foreach ($dns in @($cfg.DNSServerSearchOrder)) {
+                        if ($dns) { $dnsList += [string]$dns }
+                    }
+                }
+                $dhcpEnabled = [bool]$cfg.DHCPEnabled
+            }
+
+            $connectionStatus = 0
+            if ($na.NetConnectionStatus -ne $null) {
+                $connectionStatus = [int]$na.NetConnectionStatus
+            }
+            $enabled = [bool]$na.NetEnabled
+            $connected = ($connectionStatus -eq 2 -and $ipv4List.Count -gt 0)
+            $result += [pscustomobject]@{
+                Index         = [int]$na.Index
+                Name          = if ($na.NetConnectionID) { $na.NetConnectionID } else { $na.Name }
+                Description   = $na.Name
+                Status        = Get-SupportNetConnectionStatusText $connectionStatus
+                Enabled       = $enabled
+                Connected     = $connected
+                MacAddress    = $na.MACAddress
+                DhcpEnabled   = $dhcpEnabled
+                IPAddresses   = @($ipv4List)
+                SubnetMasks   = @($maskList)
+                Gateways      = @($gwList)
+                DnsServers    = @($dnsList)
+                Source        = 'Win32_NetworkAdapter'
+            }
+        }
+    }
+    catch {}
+
+    if ($result.Count -eq 0) {
+        foreach ($ad in @(Get-SupportNetworkAdapterInfo)) {
+            $result += [pscustomobject]@{
+                Index         = [int]$ad.Index
+                Name          = $ad.Name
+                Description   = $ad.Description
+                Status        = '已连接'
+                Enabled       = $true
+                Connected     = $true
+                MacAddress    = $ad.MacAddress
+                DhcpEnabled   = [bool]$ad.DhcpEnabled
+                IPAddresses   = @($ad.IPAddresses)
+                SubnetMasks   = @($ad.SubnetMasks)
+                Gateways      = @($ad.Gateways)
+                DnsServers    = @($ad.DnsServers)
+                Source        = 'Win32_NetworkAdapterConfiguration'
+            }
+        }
+    }
+    return $result
+}
+
+function Get-SupportPrimaryNetworkAdapterState {
+    param($Adapters)
+    if (-not $Adapters -or $Adapters.Count -eq 0) {
+        return $null
+    }
+    try {
+        $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+            Sort-Object RouteMetric, InterfaceMetric |
+            Select-Object -First 1
+        if ($route) {
+            $matched = $Adapters | Where-Object { $_.Index -eq $route.ifIndex } | Select-Object -First 1
+            if ($matched) { return $matched }
+        }
+    }
+    catch {}
+    $connected = $Adapters | Where-Object { $_.Connected -and $_.IPAddresses.Count -gt 0 } | Select-Object -First 1
+    if ($connected) { return $connected }
+    $withGateway = $Adapters | Where-Object { $_.Enabled -and $_.Gateways.Count -gt 0 } | Select-Object -First 1
+    if ($withGateway) { return $withGateway }
+    return ($Adapters | Where-Object { $_.Enabled } | Select-Object -First 1)
+}
+
 function Get-SupportWifiInfo {
     $wifi = [pscustomobject]@{
         Detected       = $false
@@ -836,6 +1120,88 @@ function Test-SupportPing {
     }
 }
 
+function Test-SupportTcpConnectDetailed {
+    param(
+        [string]$HostName = 'www.microsoft.com',
+        [int]$Port = 443,
+        [int]$TimeoutMs = 5000
+    )
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $task = $client.ConnectAsync($HostName, $Port)
+        if ($task.Wait($TimeoutMs) -and $client.Connected) {
+            return [pscustomobject]@{
+                Success = $true
+                Target  = $HostName
+                Port    = $Port
+                Detail  = ('TCP ' + $Port + ' 连接成功')
+            }
+        }
+        return [pscustomobject]@{
+            Success = $false
+            Target  = $HostName
+            Port    = $Port
+            Detail  = ('TCP ' + $Port + ' 连接超时')
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Success = $false
+            Target  = $HostName
+            Port    = $Port
+            Detail  = $_.Exception.Message
+        }
+    }
+    finally {
+        if ($client) {
+            try { $client.Close() } catch {}
+        }
+    }
+}
+
+function Test-SupportHttpsConnectDetailed {
+    param(
+        [string]$HostName = 'www.microsoft.com',
+        [int]$TimeoutMs = 7000
+    )
+    $client = $null
+    $sslStream = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $task = $client.ConnectAsync($HostName, 443)
+        if (-not $task.Wait($TimeoutMs) -or -not $client.Connected) {
+            return [pscustomobject]@{
+                Success = $false
+                Target  = $HostName
+                Detail  = 'HTTPS 端口连接超时'
+            }
+        }
+        $sslStream = New-Object System.Net.Security.SslStream -ArgumentList @($client.GetStream(), $false)
+        $sslStream.AuthenticateAsClient($HostName)
+        return [pscustomobject]@{
+            Success = $true
+            Target  = $HostName
+            Detail  = ('TLS 握手成功（' + $sslStream.SslProtocol.ToString() + '）')
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Success = $false
+            Target  = $HostName
+            Detail  = $_.Exception.Message
+        }
+    }
+    finally {
+        if ($sslStream) {
+            try { $sslStream.Close() } catch {}
+        }
+        if ($client) {
+            try { $client.Close() } catch {}
+        }
+    }
+}
+
 function Test-SupportDnsResolution {
     param([string]$HostName = 'www.microsoft.com')
     try {
@@ -847,29 +1213,59 @@ function Test-SupportDnsResolution {
     }
 }
 
+function Test-SupportDnsResolutionDetailed {
+    param([string[]]$HostNames = @('www.microsoft.com', 'www.baidu.com'))
+    $details = @()
+    foreach ($hostName in $HostNames) {
+        try {
+            $addresses = @([System.Net.Dns]::GetHostAddresses($hostName))
+            if ($addresses.Count -gt 0) {
+                $addressText = @($addresses | Select-Object -First 3 | ForEach-Object { [string]$_ }) -join ', '
+                $details += [pscustomobject]@{
+                    HostName = $hostName
+                    Success  = $true
+                    Address  = $addressText
+                    Error    = ''
+                }
+            }
+            else {
+                $details += [pscustomobject]@{
+                    HostName = $hostName
+                    Success  = $false
+                    Address  = ''
+                    Error    = '未返回地址'
+                }
+            }
+        }
+        catch {
+            $details += [pscustomobject]@{
+                HostName = $hostName
+                Success  = $false
+                Address  = ''
+                Error    = $_.Exception.Message
+            }
+        }
+    }
+    $successful = @($details | Where-Object { $_.Success })
+    return [pscustomobject]@{
+        Success = ($successful.Count -gt 0)
+        Details = @($details)
+        Summary = if ($successful.Count -gt 0) {
+            ($successful[0].HostName + ' -> ' + $successful[0].Address)
+        }
+        else {
+            '所有测试域名均无法解析'
+        }
+    }
+}
+
 function Test-SupportTcpConnect {
     param(
         [string]$HostName = 'www.microsoft.com',
         [int]$Port = 443,
         [int]$TimeoutMs = 5000
     )
-    $client = $null
-    try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $task = $client.ConnectAsync($HostName, $Port)
-        if ($task.Wait($TimeoutMs) -and $client.Connected) {
-            return $true
-        }
-        return $false
-    }
-    catch {
-        return $false
-    }
-    finally {
-        if ($client) {
-            try { $client.Close() } catch {}
-        }
-    }
+    return ([bool](Test-SupportTcpConnectDetailed -HostName $HostName -Port $Port -TimeoutMs $TimeoutMs).Success)
 }
 
 function Get-SupportPrimaryGateway {
@@ -898,141 +1294,427 @@ function Get-SupportPrimaryGateway {
     return $null
 }
 
-function Get-SupportNetworkDiagnosis {
-    $results = @()
-    Write-Host '正在检测网络，请稍候...' -ForegroundColor Gray
-
-    # 1 网络适配器
-    $adapters = @(Get-SupportNetworkAdapterInfo)
-    if ($adapters.Count -gt 0) {
-        $results += New-SupportReportObject '检测' '网络' '网络适配器' '正常' ('检测到 ' + $adapters.Count + ' 个已启用的网络适配器')
-    }
-    else {
-        $results += New-SupportReportObject '检测' '网络' '网络适配器' '异常' '未检测到已启用并获取 IP 的网卡'
-    }
-
-    # 2 IP 地址
-    $hasIp = $false
-    foreach ($ad in $adapters) {
-        foreach ($ip in $ad.IPAddresses) {
-            if ($ip -notmatch '^127\.' -and $ip -notmatch '^169\.254\.') {
-                $hasIp = $true
-                break
+function Get-SupportPublicConnectivityResult {
+    $targets = @('223.5.5.5', '114.114.114.114', '8.8.8.8', '1.1.1.1')
+    foreach ($target in $targets) {
+        if (Test-SupportPing -Target $target -Count 1 -TimeoutMs 1200) {
+            return [pscustomobject]@{
+                Success = $true
+                Target  = $target
+                Method  = 'ICMP'
+                Detail  = ('Ping 公网 IP ' + $target + ' 成功')
             }
         }
-        if ($hasIp) { break }
     }
-    if ($hasIp) {
-        $results += New-SupportReportObject '检测' '网络' 'IP地址' '正常' '本机已获取有效 IP 地址'
+    foreach ($target in $targets) {
+        $tcpResult = Test-SupportTcpConnectDetailed -HostName $target -Port 443 -TimeoutMs 2500
+        if ($tcpResult.Success) {
+            return [pscustomobject]@{
+                Success = $true
+                Target  = $target
+                Method  = 'TCP'
+                Detail  = ('公网 IP ' + $target + ' 的 TCP 443 可达（ICMP 可能被屏蔽）')
+            }
+        }
     }
-    else {
-        $results += New-SupportReportObject '检测' '网络' 'IP地址' '异常' '本机没有有效的 IPv4 地址'
+    return [pscustomobject]@{
+        Success = $false
+        Target  = ''
+        Method  = ''
+        Detail  = '公网 IP 的 ICMP 与 TCP 443 测试均失败'
+    }
+}
+
+function Get-SupportHttpsConnectivityResult {
+    $targets = @('www.microsoft.com', 'www.baidu.com')
+    $lastError = ''
+    foreach ($target in $targets) {
+        $result = Test-SupportHttpsConnectDetailed -HostName $target
+        if ($result.Success) {
+            return $result
+        }
+        $lastError = $result.Detail
+    }
+    return [pscustomobject]@{
+        Success = $false
+        Target  = ''
+        Detail  = $lastError
+    }
+}
+
+function Get-SupportNetworkEvidence {
+    $adapters = @(Get-SupportNetworkAdapterState)
+    $selectedAdapter = Get-SupportPrimaryNetworkAdapterState $adapters
+    $gateway = ''
+    if ($selectedAdapter -and $selectedAdapter.Gateways.Count -gt 0) {
+        $gateway = [string]$selectedAdapter.Gateways[0]
+    }
+    if (-not $gateway) {
+        $gateway = Get-SupportPrimaryGateway
     }
 
-    # 3 默认网关
-    $gateway = Get-SupportPrimaryGateway
+    $gatewayPingOk = $false
     if ($gateway) {
-        $results += New-SupportReportObject '检测' '网络' '默认网关' '正常' ('网关：' + $gateway)
-    }
-    else {
-        $results += New-SupportReportObject '检测' '网络' '默认网关' '异常' '未获取到默认网关'
+        $gatewayPingOk = Test-SupportPing -Target $gateway -Count 2 -TimeoutMs 1200
     }
 
-    # 4 Ping 网关
-    if ($gateway) {
-        $gwOk = Test-SupportPing -Target $gateway -Count 2
-        if ($gwOk) {
-            $results += New-SupportReportObject '检测' '网络' '网关连接' '正常' '可以 Ping 通默认网关'
+    return [pscustomobject]@{
+        Adapters           = @($adapters)
+        SelectedAdapter    = $selectedAdapter
+        TcpIpOk            = Test-SupportPing -Target '127.0.0.1' -Count 2 -TimeoutMs 800
+        Gateway            = $gateway
+        GatewayPingOk      = $gatewayPingOk
+        PublicConnectivity = Get-SupportPublicConnectivityResult
+        Dns                = Test-SupportDnsResolutionDetailed
+        Https              = Get-SupportHttpsConnectivityResult
+        Proxy              = Get-SupportProxyInfo
+    }
+}
+
+function ConvertTo-SupportNetworkDiagnosticResults {
+    param($Evidence)
+    $results = @()
+    $adapters = @($Evidence.Adapters)
+    $selected = $Evidence.SelectedAdapter
+    $enabledAdapters = @($adapters | Where-Object { $_.Enabled })
+
+    if ($Evidence.TcpIpOk) {
+        $results += New-SupportDiagnosticResult '网络' 'TCP/IP 协议栈' 'PASS' '本机回环通信正常' '' ''
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' 'TCP/IP 协议栈' 'FAIL' '本机回环通信失败' 'TCP/IP 协议栈可能异常或 Winsock 配置损坏。' '建议重置 Winsock/TCP/IP，并重启电脑后重新检测。' 'ResetTcpIp'
+    }
+
+    if ($adapters.Count -eq 0) {
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' '未检测到网络适配器' '系统没有识别到可用网卡，或网卡驱动未正常安装。' '检查设备管理器中的网卡状态，确认无线开关和驱动正常。' ''
+    }
+    elseif ($enabledAdapters.Count -eq 0) {
+        $adapterNames = @($adapters | ForEach-Object { $_.Name }) -join '; '
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ('检测到网卡但均已禁用：' + $adapterNames) '所有网络适配器当前均处于禁用状态。' '在“网络连接”或设备管理器中启用需要的网卡。' ''
+    }
+    elseif (-not $selected) {
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'WARNING' ('检测到 ' + $enabledAdapters.Count + ' 个已启用网卡，但无法确定主网卡') '系统可能处于多网卡切换状态。' '检查网线、Wi-Fi 和网络适配器状态。' ''
+    }
+    elseif (-not $selected.Enabled) {
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '主网络适配器已被禁用。' '启用该网络适配器后重新检测。' ''
+    }
+    elseif (-not $selected.Connected) {
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'FAIL' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '网卡已启用，但没有建立有效网络连接。' '检查网线、Wi-Fi 开关、AP/交换机端口和网卡驱动。' 'RestartAdapter'
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' '网络适配器' 'PASS' ($selected.Name + '：' + $selected.Status + '；MAC：' + $selected.MacAddress) '' ''
+    }
+
+    $validIps = @()
+    $apipaIps = @()
+    foreach ($ad in $enabledAdapters) {
+        foreach ($ip in $ad.IPAddresses) {
+            if ($ip -match '^127\.') { continue }
+            if ($ip -match '^169\.254\.') { $apipaIps += $ip }
+            else { $validIps += $ip }
         }
-        else {
-            $results += New-SupportReportObject '检测' '网络' '网关连接' '警告' 'Ping 网关超时（部分网络会屏蔽 Ping）'
+    }
+
+    $ipSource = $selected
+    if (-not $ipSource -and $enabledAdapters.Count -gt 0) { $ipSource = $enabledAdapters[0] }
+    $maskText = ''
+    $dnsText = ''
+    $dhcpText = ''
+    if ($ipSource) {
+        if ($ipSource.SubnetMasks.Count -gt 0) { $maskText = ($ipSource.SubnetMasks -join ', ') }
+        if ($ipSource.DnsServers.Count -gt 0) { $dnsText = ($ipSource.DnsServers -join ', ') }
+        if ($ipSource.DhcpEnabled) { $dhcpText = 'DHCP 已启用' } else { $dhcpText = '静态 IP 或 DHCP 未启用' }
+    }
+
+    if ($validIps.Count -gt 0) {
+        $ipText = 'IPv4：' + (($validIps | Select-Object -Unique) -join ', ')
+        if ($maskText) { $ipText += '；子网掩码：' + $maskText }
+        if ($dnsText) { $ipText += '；DNS：' + $dnsText }
+        if ($dhcpText) { $ipText += '；' + $dhcpText }
+        $results += New-SupportDiagnosticResult '网络' 'IP 配置' 'PASS' $ipText '' ''
+    }
+    elseif ($apipaIps.Count -gt 0) {
+        $results += New-SupportDiagnosticResult '网络' 'IP 配置' 'FAIL' ('仅获得 APIPA 地址：' + (($apipaIps | Select-Object -Unique) -join ', ')) '设备未能从 DHCP 获得有效 IPv4 地址。' '检查网线/Wi-Fi、DHCP 服务或路由器，并尝试重新获取 IP。' 'RenewIp'
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' 'IP 配置' 'FAIL' '没有有效的 IPv4 地址' '设备当前没有获得可用 IP 地址。' '检查 DHCP、网线/Wi-Fi 连接，或尝试重新获取 IP。' 'RenewIp'
+    }
+
+    if ($Evidence.Gateway) {
+        $results += New-SupportDiagnosticResult '网络' '默认网关' 'PASS' ('网关：' + $Evidence.Gateway) '' ''
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' '默认网关' 'FAIL' '未获取到默认网关' 'IPv4 配置中没有默认路由，设备无法跨网段访问。' '重新获取 IP；如为静态配置，请检查网关地址。' 'RenewIp'
+    }
+
+    if (-not $Evidence.Gateway) {
+        $results += New-SupportDiagnosticResult '网络' '网关连通性' 'INFO' '未配置默认网关，未执行网关探测' '' ''
+    }
+    elseif ($Evidence.GatewayPingOk) {
+        $results += New-SupportDiagnosticResult '网络' '网关连通性' 'PASS' ('可以 Ping 通 ' + $Evidence.Gateway) '' ''
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' '网关连通性' 'WARNING' ('Ping ' + $Evidence.Gateway + ' 超时') '网关可能不可达，也可能只是屏蔽了 ICMP Ping；需要结合公网检测结果判断。' '若公网也不可访问，请检查局域网、交换机/AP、网关配置。' ''
+    }
+
+    if ($Evidence.PublicConnectivity.Success) {
+        $results += New-SupportDiagnosticResult '网络' 'Internet' 'PASS' $Evidence.PublicConnectivity.Detail '' ''
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' 'Internet' 'FAIL' $Evidence.PublicConnectivity.Detail '设备可以配置 IPv4，但公网 IP 的 ICMP 和 TCP 443 均不可达。' '检查路由、防火墙、代理和上游网络，或联系网络管理员。' ''
+    }
+
+    if ($Evidence.Dns.Success) {
+        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'PASS' $Evidence.Dns.Summary '' ''
+    }
+    else {
+        $results += New-SupportDiagnosticResult '网络' 'DNS 解析' 'FAIL' $Evidence.Dns.Summary '域名无法解析为 IP 地址，可能是 DNS 服务、DNS 配置或缓存异常。' '检查 DNS 服务器配置，或执行刷新 DNS 缓存后重新检测。' 'FlushDns'
+    }
+
+    if (-not $Evidence.PublicConnectivity.Success) {
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'INFO' '基础公网连接失败，未单独判断 HTTPS' '' ''
+    }
+    elseif (-not $Evidence.Dns.Success) {
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'INFO' 'DNS 解析失败，未单独判断 HTTPS' '' ''
+    }
+    elseif ($Evidence.Https.Success) {
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'PASS' ($Evidence.Https.Target + '：' + $Evidence.Https.Detail) '' ''
+    }
+    else {
+        $diagnosis = '基础网络可达，但 TLS 或 HTTPS 端口连接失败。'
+        if ($Evidence.Proxy.Enabled) {
+            $diagnosis += ' 当前系统启用了代理：' + $Evidence.Proxy.Server
         }
+        $results += New-SupportDiagnosticResult '网络' 'HTTPS 访问' 'FAIL' $Evidence.Https.Detail $diagnosis '检查系统代理、防火墙、证书和企业网络策略。' ''
     }
 
-    # 5 Ping 公网 IP
-    $internetTargets = @('223.5.5.5', '114.114.114.114', '8.8.8.8')
-    $internetOk = $false
-    $reachableTarget = ''
-    foreach ($target in $internetTargets) {
-        if (Test-SupportPing -Target $target -Count 1) {
-            $internetOk = $true
-            $reachableTarget = $target
-            break
-        }
+    if ($Evidence.Proxy.Enabled) {
+        $results += New-SupportDiagnosticResult '网络' '代理设置' 'INFO' $Evidence.Proxy.Summary 'HTTPS 异常时，代理配置是常见原因。' '' ''
     }
-    if ($internetOk) {
-        $results += New-SupportReportObject '检测' '网络' 'Internet' '正常' ('可以访问公网（' + $reachableTarget + '）')
-    }
-    else {
-        $results += New-SupportReportObject '检测' '网络' 'Internet' '异常' 'Ping 公网 IP 均失败'
-    }
-
-    # 6 DNS 解析
-    $dnsOk = Test-SupportDnsResolution
-    if ($dnsOk) {
-        $results += New-SupportReportObject '检测' '网络' 'DNS解析' '正常' '域名解析正常'
-    }
-    else {
-        $results += New-SupportReportObject '检测' '网络' 'DNS解析' '异常' '无法解析域名'
-    }
-
-    # 7 TCP 443
-    $tcpOk = Test-SupportTcpConnect 'www.microsoft.com' 443
-    if ($tcpOk) {
-        $results += New-SupportReportObject '检测' '网络' 'TCP 443' '正常' 'HTTPS 连接测试正常'
-    }
-    else {
-        $results += New-SupportReportObject '检测' '网络' 'TCP 443' '异常' 'HTTPS(443) 连接测试失败'
-    }
-
     return $results
+}
+
+function Get-SupportNetworkDiagnosticSummary {
+    param($Results)
+    $problemItems = @($Results | Where-Object { $_.Status -eq 'FAIL' -or $_.Status -eq 'WARNING' })
+    $problems = @()
+    foreach ($item in $problemItems) {
+        $problems += [pscustomobject]@{
+            Name           = $item.Name
+            Status         = $item.Status
+            Result         = $item.Result
+            Diagnosis      = $item.Diagnosis
+            Recommendation = $item.Recommendation
+        }
+    }
+
+    $adapterFail = @($Results | Where-Object { $_.Name -eq '网络适配器' -and $_.Status -eq 'FAIL' }).Count -gt 0
+    $ipFail = @($Results | Where-Object { $_.Name -eq 'IP 配置' -and $_.Status -eq 'FAIL' }).Count -gt 0
+    $gateway = $Results | Where-Object { $_.Name -eq '默认网关' } | Select-Object -First 1
+    $gatewayConnectivity = $Results | Where-Object { $_.Name -eq '网关连通性' } | Select-Object -First 1
+    $internet = $Results | Where-Object { $_.Name -eq 'Internet' } | Select-Object -First 1
+    $dns = $Results | Where-Object { $_.Name -eq 'DNS 解析' } | Select-Object -First 1
+    $https = $Results | Where-Object { $_.Name -eq 'HTTPS 访问' } | Select-Object -First 1
+
+    $primaryDiagnosis = '网络连接正常，未发现需要优先处理的问题。'
+    $recommendation = ''
+    if ($adapterFail) {
+        $primaryDiagnosis = '检测到网络适配器可能未正常工作。'
+        $recommendation = '检查网卡状态、驱动、无线开关或物理连接。'
+    }
+    elseif ($ipFail) {
+        $primaryDiagnosis = '设备当前没有获得有效 IPv4 地址。'
+        $recommendation = '检查 DHCP、网线/Wi-Fi 连接，或尝试重新获取 IP。'
+    }
+    elseif ($internet -and $internet.Status -eq 'FAIL') {
+        $primaryDiagnosis = '本机已获得 IP，但无法访问公网。'
+        if ($gatewayConnectivity -and $gatewayConnectivity.Status -eq 'WARNING') {
+            $primaryDiagnosis += ' 默认网关也未响应探测。'
+        }
+        $recommendation = '优先检查局域网连接、交换机/AP、网关和相关防火墙配置。'
+    }
+    elseif ($internet -and $internet.Status -eq 'PASS' -and $dns -and $dns.Status -eq 'FAIL') {
+        $primaryDiagnosis = '互联网连接正常，但 DNS 解析异常。'
+        $recommendation = '检查 DNS 服务器配置，或执行刷新 DNS 缓存。'
+    }
+    elseif ($internet -and $internet.Status -eq 'PASS' -and $dns -and $dns.Status -eq 'PASS' -and $https -and $https.Status -eq 'FAIL') {
+        $primaryDiagnosis = '基础网络连通，但 HTTPS 访问异常。'
+        $recommendation = '检查代理、防火墙、证书或企业网络策略。'
+    }
+    elseif ($gatewayConnectivity -and $gatewayConnectivity.Status -eq 'WARNING') {
+        $primaryDiagnosis = '网络可用，但默认网关未响应 Ping。'
+        $recommendation = '公网可达时通常说明网关屏蔽了 ICMP，不影响使用；若业务异常再检查网关策略。'
+    }
+    elseif ($gateway -and $gateway.Status -eq 'FAIL') {
+        $primaryDiagnosis = '网络已连接但没有有效的默认网关。'
+        $recommendation = '重新获取 IP；如为静态配置，请检查网关地址。'
+    }
+
+    return [pscustomobject]@{
+        IsHealthy        = ($problemItems.Count -eq 0)
+        PrimaryDiagnosis = $primaryDiagnosis
+        Recommendation   = $recommendation
+        Problems         = @($problems)
+    }
+}
+
+function Write-SupportDiagnosticResults {
+    param($Results)
+    foreach ($r in $Results) {
+        $color = Get-SupportStatusColor $r.Status
+        $line = '[' + $r.Status + '] ' + $r.Name
+        if ($r.Result) { $line += '：' + $r.Result }
+        Write-Host $line -ForegroundColor $color
+        if ($r.Diagnosis) {
+            Write-Host ('  诊断：' + $r.Diagnosis) -ForegroundColor Gray
+        }
+        if ($r.Recommendation) {
+            Write-Host ('  建议：' + $r.Recommendation) -ForegroundColor Gray
+        }
+    }
+}
+
+function Get-SupportNetworkRecommendedAction {
+    param($Results)
+    $adapter = $Results | Where-Object { $_.Name -eq '网络适配器' -and $_.Status -eq 'FAIL' -and $_.ActionCode -eq 'RestartAdapter' } | Select-Object -First 1
+    if ($adapter) {
+        return [pscustomobject]@{
+            Code      = 'RestartAdapter'
+            MenuText  = '执行建议修复：重启主要网络适配器'
+            Target    = ''
+        }
+    }
+    $ip = $Results | Where-Object { $_.Name -eq 'IP 配置' -and $_.Status -eq 'FAIL' } | Select-Object -First 1
+    if ($ip) {
+        return [pscustomobject]@{
+            Code      = 'RenewIp'
+            MenuText  = '执行建议修复：重新获取 IP'
+            Target    = ''
+        }
+    }
+    $dns = $Results | Where-Object { $_.Name -eq 'DNS 解析' -and $_.Status -eq 'FAIL' } | Select-Object -First 1
+    if ($dns) {
+        return [pscustomobject]@{
+            Code      = 'FlushDns'
+            MenuText  = '执行建议修复：刷新 DNS 缓存'
+            Target    = ''
+        }
+    }
+    return $null
+}
+
+function Invoke-SupportNetworkRecommendedAction {
+    param($Action)
+    switch ($Action.Code) {
+        'FlushDns' { return [bool](Invoke-NetworkFlushDns) }
+        'RenewIp' { return [bool](Invoke-NetworkRenewIp) }
+        'RestartAdapter' { return [bool](Invoke-NetworkRestartAdapter) }
+        default { return $false }
+    }
+}
+
+function Get-SupportNetworkDiagnosis {
+    $evidence = Get-SupportNetworkEvidence
+    return @(ConvertTo-SupportNetworkDiagnosticResults $evidence)
 }
 
 function Show-SupportNetworkDiagnosis {
     Write-SectionTitle '网络诊断'
-    $results = @(Get-SupportNetworkDiagnosis)
+    Write-Host '正在检测网络，请稍候...' -ForegroundColor Gray
+    $currentResults = @(Get-SupportNetworkDiagnosis)
     Write-Host ''
-    foreach ($r in $results) {
-        switch ($r.Status) {
-            '正常' { Write-Host ('[正常] ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Green }
-            '警告' { Write-Host ('[警告] ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Yellow }
-            default { Write-Host ('[异常] ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Red }
+    Write-SupportDiagnosticResults $currentResults
+    $summary = Get-SupportNetworkDiagnosticSummary $currentResults
+    Write-Host ''
+    Write-SubTitle '诊断结论'
+    Write-Host $summary.PrimaryDiagnosis -ForegroundColor Cyan
+    if ($summary.Recommendation) {
+        Write-Host ('建议：' + $summary.Recommendation) -ForegroundColor Gray
+    }
+    elseif ($summary.IsHealthy) {
+        Write-Host '当前网络检测通过。' -ForegroundColor Green
+    }
+
+    while ($true) {
+        $action = Get-SupportNetworkRecommendedAction $currentResults
+        Write-Host ''
+        if ($action) {
+            Write-Host ('[1] ' + $action.MenuText)
+            Write-Host '[2] 重新检测'
+            Write-Host '[0] 返回'
+            Write-Host ''
+            $choice = Read-MenuSelection 2
+            if ($choice -eq 0) { return }
+            if ($choice -eq 1) {
+                $beforeResults = @($currentResults)
+                Write-Host ''
+                $fixOk = Invoke-SupportNetworkRecommendedAction $action
+                Write-Host ''
+                Write-Host '正在自动重新检测网络...' -ForegroundColor Gray
+                $currentResults = @(Get-SupportNetworkDiagnosis)
+                Write-Host ''
+                Write-SupportDiagnosticResults $currentResults
+                $newSummary = Get-SupportNetworkDiagnosticSummary $currentResults
+                Write-Host ''
+                Write-SubTitle '修复后结论'
+                Write-Host $newSummary.PrimaryDiagnosis -ForegroundColor Cyan
+                if ($newSummary.Recommendation) {
+                    Write-Host ('建议：' + $newSummary.Recommendation) -ForegroundColor Gray
+                }
+
+                $beforeFailures = @($beforeResults | Where-Object { $_.Status -eq 'FAIL' }).Count
+                $afterFailures = @($currentResults | Where-Object { $_.Status -eq 'FAIL' }).Count
+                if ($beforeFailures -gt 0 -and $afterFailures -eq 0) {
+                    Write-OkText '问题已解决。'
+                }
+                elseif ($afterFailures -lt $beforeFailures) {
+                    Write-WarnText '部分问题已解决，但仍有需要处理的异常。'
+                }
+                elseif ($fixOk) {
+                    Write-WarnText '修复操作已执行，但问题仍然存在。'
+                }
+                else {
+                    Write-WarnText '修复操作未成功完成，问题仍然存在。'
+                }
+                continue
+            }
+            if ($choice -eq 2) {
+                Write-Host ''
+                Write-Host '正在重新检测网络...' -ForegroundColor Gray
+                $currentResults = @(Get-SupportNetworkDiagnosis)
+                Write-Host ''
+                Write-SupportDiagnosticResults $currentResults
+                $summary = Get-SupportNetworkDiagnosticSummary $currentResults
+                Write-Host ''
+                Write-SubTitle '诊断结论'
+                Write-Host $summary.PrimaryDiagnosis -ForegroundColor Cyan
+                if ($summary.Recommendation) {
+                    Write-Host ('建议：' + $summary.Recommendation) -ForegroundColor Gray
+                }
+                continue
+            }
+        }
+        else {
+            Write-Host '[1] 重新检测'
+            Write-Host '[0] 返回'
+            Write-Host ''
+            $choice = Read-MenuSelection 1
+            if ($choice -eq 0) { return }
+            Write-Host ''
+            Write-Host '正在重新检测网络...' -ForegroundColor Gray
+            $currentResults = @(Get-SupportNetworkDiagnosis)
+            Write-Host ''
+            Write-SupportDiagnosticResults $currentResults
+            $summary = Get-SupportNetworkDiagnosticSummary $currentResults
+            Write-Host ''
+            Write-SubTitle '诊断结论'
+            Write-Host $summary.PrimaryDiagnosis -ForegroundColor Cyan
+            if ($summary.Recommendation) {
+                Write-Host ('建议：' + $summary.Recommendation) -ForegroundColor Gray
+            }
+            continue
         }
     }
-
-    Write-Host ''
-    Write-SubTitle '结论'
-    $adapterBad = @($results | Where-Object { $_.Check -eq '网络适配器' -and $_.Status -eq '异常' }).Count -gt 0
-    $ipBad = @($results | Where-Object { $_.Check -eq 'IP地址' -and $_.Status -eq '异常' }).Count -gt 0
-    $gwBad = @($results | Where-Object { $_.Check -eq '默认网关' -and $_.Status -eq '异常' }).Count -gt 0
-    $gwWarn = @($results | Where-Object { $_.Check -eq '网关连接' -and $_.Status -eq '警告' }).Count -gt 0
-    $netBad = @($results | Where-Object { $_.Check -eq 'Internet' -and $_.Status -eq '异常' }).Count -gt 0
-    $dnsBad = @($results | Where-Object { $_.Check -eq 'DNS解析' -and $_.Status -eq '异常' }).Count -gt 0
-    $tcpBad = @($results | Where-Object { $_.Check -eq 'TCP 443' -and $_.Status -eq '异常' }).Count -gt 0
-
-    if ($adapterBad -or $ipBad) {
-        Write-Host '网络适配器异常或未获取到 IP，请检查网线/Wi-Fi 开关，或尝试重新获取 IP。'
-    }
-    elseif ($gwBad) {
-        Write-Host '网络已连接但没有默认网关，请尝试「重新获取 IP」或联系网络管理员。'
-    }
-    elseif ($netBad) {
-        Write-Host '网络连接存在，但无法访问公网，请检查路由、防火墙或联系网络管理员。'
-    }
-    elseif ($dnsBad) {
-        Write-Host '网络连接正常，但 DNS 解析异常，建议刷新 DNS 或更换 DNS 服务器。'
-    }
-    elseif ($tcpBad) {
-        Write-Host '基本网络正常，但 HTTPS 连接异常，可能是防火墙/代理设置导致。'
-    }
-    elseif ($gwWarn) {
-        Write-Host '基本正常。网关 Ping 不通但公网可访问，通常是网关设备屏蔽了 Ping，不影响使用。'
-    }
-    else {
-        Write-Host '网络连接正常。' -ForegroundColor Green
-    }
-    Write-Host ''
-    Write-Host '如需进一步修复，可在「网络 -> 网络修复」中选择对应操作。' -ForegroundColor Gray
 }
 
 # ---- 网络修复 ----
@@ -1047,13 +1729,14 @@ function Invoke-NetworkFlushDns {
     else {
         Write-ErrorText ('命令执行失败（退出码 ' + $code + '）。')
     }
+    return ($code -eq 0)
 }
 
 function Invoke-NetworkRenewIp {
     Write-SubTitle '重新获取 IP'
     if (-not (Get-SupportConfirmation '此操作会短暂断开网络并重新获取 IP。是否继续？')) {
         Write-NoticeText '操作已取消。'
-        return
+        return $false
     }
     Write-Host '正在释放 IP（ipconfig /release）...'
     $null = Invoke-SupportNativeCommand 'ipconfig.exe' @('/release')
@@ -1061,9 +1744,11 @@ function Invoke-NetworkRenewIp {
     $code = Invoke-SupportNativeCommand 'ipconfig.exe' @('/renew')
     if ($code -eq 0) {
         Write-OkText 'IP 已重新获取。'
+        return $true
     }
     else {
         Write-WarnText '重新获取 IP 命令返回异常。如果使用静态 IP 或公司网络策略，这属于正常情况。'
+        return $false
     }
 }
 
@@ -1119,6 +1804,15 @@ function Get-SupportDefaultNetworkAdapter {
     }
     catch {}
     try {
+        $states = @(Get-SupportNetworkAdapterState)
+        $primaryState = Get-SupportPrimaryNetworkAdapterState $states
+        if ($primaryState -and $primaryState.Name) {
+            $adState = Get-NetAdapter -Name $primaryState.Name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($adState) { return $adState }
+        }
+    }
+    catch {}
+    try {
         $adapters = @(Get-SupportNetworkAdapterInfo)
         if ($adapters.Count -gt 0) {
             $primary = $adapters[0]
@@ -1135,16 +1829,16 @@ function Invoke-NetworkRestartAdapter {
     $ad = Get-SupportDefaultNetworkAdapter
     if (-not $ad) {
         Write-WarnText '无法确定要重启的网络适配器。'
-        return
+        return $false
     }
     Write-Host ('将重启网卡：' + $ad.Name + '（' + $ad.InterfaceDescription + '）')
     Write-Host '重启过程中网络会暂时断开。' -ForegroundColor Yellow
     if (-not (Get-SupportConfirmation '是否继续？')) {
         Write-NoticeText '操作已取消。'
-        return
+        return $false
     }
     if (-not (Confirm-SupportAdminOperation '重启网卡需要管理员权限。')) {
-        return
+        return $false
     }
     try {
         Write-Host '正在禁用网卡...'
@@ -1155,6 +1849,7 @@ function Invoke-NetworkRestartAdapter {
         Write-Host '正在等待网络重新获取 IP ...'
         Start-Sleep -Seconds 8
         Write-OkText '网卡已重启。'
+        return $true
     }
     catch {
         Write-ErrorText ('重启网卡失败：' + $_.Exception.Message)
@@ -1163,6 +1858,7 @@ function Invoke-NetworkRestartAdapter {
             Enable-NetAdapter -Name $ad.Name -Confirm:$false -ErrorAction SilentlyContinue
         }
         catch {}
+        return $false
     }
 }
 
@@ -1221,14 +1917,14 @@ function Invoke-NetworkCommonFix {
     Write-SubTitle '修复后重新检测网络'
     $results = @(Get-SupportNetworkDiagnosis)
     Write-Host ''
-    foreach ($r in $results) {
-        switch ($r.Status) {
-            '正常' { Write-OkText ($r.Check + ' - ' + $r.Message) }
-            '警告' { Write-WarnText ($r.Check + ' - ' + $r.Message) }
-            default { Write-ErrorText ($r.Check + ' - ' + $r.Message) }
-        }
+    Write-SupportDiagnosticResults $results
+    $summary = Get-SupportNetworkDiagnosticSummary $results
+    Write-Host ''
+    Write-Host $summary.PrimaryDiagnosis -ForegroundColor Cyan
+    if ($summary.Recommendation) {
+        Write-Host ('建议：' + $summary.Recommendation) -ForegroundColor Gray
     }
-    $stillBad = @($results | Where-Object { $_.Status -eq '异常' }).Count
+    $stillBad = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
     if ($stillBad -gt 0) {
         Write-Host ''
         Write-WarnText ('修复后仍有 ' + $stillBad + ' 项异常。如果重启电脑后仍无法上网，请继续使用「网络诊断」或联系网络管理员。')
@@ -1253,11 +1949,11 @@ function Show-NetworkRepairMenu {
         $choice = Read-MenuSelection 6
         Write-Host ''
         switch ($choice) {
-            1 { Invoke-NetworkFlushDns }
-            2 { Invoke-NetworkRenewIp }
+            1 { [void](Invoke-NetworkFlushDns) }
+            2 { [void](Invoke-NetworkRenewIp) }
             3 { Invoke-NetworkResetWinsock }
             4 { Invoke-NetworkResetTcpIp }
-            5 { Invoke-NetworkRestartAdapter }
+            5 { [void](Invoke-NetworkRestartAdapter) }
             6 { Invoke-NetworkCommonFix }
             0 { return }
         }
@@ -2469,32 +3165,32 @@ function Get-SupportComputerDetectionChecks {
     $results = @()
     $f = Get-SupportComputerFacts
     if ($f.OsCaption -and $f.OsCaption -ne '无法获取') {
-        $results += New-SupportReportObject '检测' '电脑' 'Windows' '正常' $f.OsCaption
+        $results += New-SupportDiagnosticResult '电脑' 'Windows 系统' 'PASS' $f.OsCaption '' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '电脑' 'Windows' '异常' '无法获取 Windows 版本信息'
+        $results += New-SupportDiagnosticResult '电脑' 'Windows 系统' 'FAIL' '无法获取 Windows 版本信息' '系统信息查询未返回有效结果。' '检查 WMI/CIM 服务是否正常，并在管理员 PowerShell 中重新检测。' ''
     }
     if ($f.Cpu -and $f.Cpu -ne '无法获取') {
         $cpuShort = $f.Cpu
         if ($cpuShort.Length -gt 70) { $cpuShort = $cpuShort.Substring(0, 70) + '...' }
-        $results += New-SupportReportObject '检测' '电脑' 'CPU' '正常' $cpuShort
+        $results += New-SupportDiagnosticResult '电脑' 'CPU' 'PASS' $cpuShort '' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '电脑' 'CPU' '异常' '无法获取 CPU 信息'
+        $results += New-SupportDiagnosticResult '电脑' 'CPU' 'FAIL' '无法获取 CPU 信息' 'Windows 未能返回 CPU 硬件信息。' '检查 WMI/CIM 服务或设备管理器中的处理器状态。' ''
     }
     if ($f.MemoryTotal -and $f.MemoryTotal -ne '无法获取') {
-        $results += New-SupportReportObject '检测' '电脑' '内存' '正常' ('总内存 ' + $f.MemoryTotal)
+        $results += New-SupportDiagnosticResult '电脑' '内存' 'PASS' ('总内存 ' + $f.MemoryTotal + '，当前可用 ' + $f.MemoryFree) '' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '电脑' '内存' '异常' '无法获取内存信息'
+        $results += New-SupportDiagnosticResult '电脑' '内存' 'FAIL' '无法获取内存信息' 'Windows 未能返回物理内存信息。' '检查 WMI/CIM 服务或稍后重新检测。' ''
     }
     if ($f.Gpu -and $f.Gpu -ne '无法获取') {
         $gpuShort = $f.Gpu
         if ($gpuShort.Length -gt 80) { $gpuShort = $gpuShort.Substring(0, 80) + '...' }
-        $results += New-SupportReportObject '检测' '电脑' 'GPU' '正常' $gpuShort
+        $results += New-SupportDiagnosticResult '电脑' 'GPU' 'PASS' $gpuShort '' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '电脑' 'GPU' '提示' '无法获取 GPU 信息（虚拟机或无显示设备时属正常）'
+        $results += New-SupportDiagnosticResult '电脑' 'GPU' 'INFO' '无法获取 GPU 信息（虚拟机或无显示设备时属正常）' '' ''
     }
     return $results
 }
@@ -2504,19 +3200,19 @@ function Get-SupportDiskDetectionChecks {
     $disks = @(Get-SupportDiskInfo)
     $systemDisk = $disks | Where-Object { $_.DriveLetter -eq 'C:' } | Select-Object -First 1
     if (-not $systemDisk) {
-        $results += New-SupportReportObject '检测' '磁盘' '系统磁盘' '异常' '未找到 C 盘信息'
+        $results += New-SupportDiagnosticResult '磁盘' 'C盘空间' 'FAIL' '未找到 C 盘信息' '无法从系统卷中读取 C 盘容量数据。' '检查磁盘管理中的 C 盘状态和 WMI/CIM 服务。' ''
         return $results
     }
     $usedPercent = [double]$systemDisk.UsedPercent
     $message = ('C盘：总容量 ' + $systemDisk.TotalText + '，已用 ' + $systemDisk.UsedText + '（' + $systemDisk.UsedPercentText + '），剩余 ' + $systemDisk.FreeText)
     if ($usedPercent -ge 95) {
-        $results += New-SupportReportObject '检测' '磁盘' '系统磁盘' '异常' $message
+        $results += New-SupportDiagnosticResult '磁盘' 'C盘空间' 'FAIL' $message 'C 盘可用空间极低，可能影响更新、系统文件和临时文件写入。' '立即清理临时文件、卸载无用软件或将大型文件移到其他磁盘。' ''
     }
     elseif ($usedPercent -ge 90) {
-        $results += New-SupportReportObject '检测' '磁盘' '系统磁盘' '警告' $message
+        $results += New-SupportDiagnosticResult '磁盘' 'C盘空间' 'WARNING' $message 'C 盘空间接近不足，长期使用可能影响 Windows 更新。' '建议清理系统临时文件并检查大文件占用。' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '磁盘' '系统磁盘' '正常' $message
+        $results += New-SupportDiagnosticResult '磁盘' 'C盘空间' 'PASS' $message '' ''
     }
     return $results
 }
@@ -2525,7 +3221,7 @@ function Get-SupportBatteryDetectionChecks {
     $results = @()
     $bat = Get-SupportBattery
     if (-not $bat.HasBattery) {
-        $results += New-SupportReportObject '检测' '电池' '电池' '提示' '未检测到电池（台式机或虚拟机）'
+        $results += New-SupportDiagnosticResult '电脑' '电池' 'INFO' '未检测到电池（台式机或虚拟机）' '' ''
         return $results
     }
     $batteryText = '电量 ' + $bat.ChargeText
@@ -2533,21 +3229,21 @@ function Get-SupportBatteryDetectionChecks {
         $batteryText += '，' + $bat.PowerStatusText
     }
     if ($bat.ChargePercent -ne $null -and $bat.ChargePercent -lt 20) {
-        $results += New-SupportReportObject '检测' '电池' '电池' '警告' ($batteryText + '，电量偏低')
+        $results += New-SupportDiagnosticResult '电脑' '电池' 'WARNING' ($batteryText + '，电量偏低') '电池电量低于 20%。' '连接电源并检查充电状态。' ''
     }
     else {
-        $results += New-SupportReportObject '检测' '电池' '电池' '正常' $batteryText
+        $results += New-SupportDiagnosticResult '电脑' '电池' 'PASS' $batteryText '' ''
     }
     if ($bat.HealthPercent -ne $null) {
         if ($bat.HealthPercent -lt 80) {
-            $results += New-SupportReportObject '检测' '电池' '电池健康' '警告' ('设计容量对比当前充满容量约为 ' + $bat.HealthPercentText)
+            $results += New-SupportDiagnosticResult '电脑' '电池健康' 'WARNING' ('设计容量对比当前充满容量约为 ' + $bat.HealthPercentText) '电池健康度低于 80%，续航可能明显下降。' '检查电源使用情况；如续航异常，建议联系硬件支持。' ''
         }
         else {
-            $results += New-SupportReportObject '检测' '电池' '电池健康' '正常' ('电池健康度约 ' + $bat.HealthPercentText)
+            $results += New-SupportDiagnosticResult '电脑' '电池健康' 'PASS' ('电池健康度约 ' + $bat.HealthPercentText) '' ''
         }
     }
     else {
-        $results += New-SupportReportObject '检测' '电池' '电池健康' '提示' '无法获取电池健康信息（设备或驱动不支持）'
+        $results += New-SupportDiagnosticResult '电脑' '电池健康' 'INFO' '无法获取电池健康信息（设备或驱动不支持）' '' ''
     }
     return $results
 }
@@ -2556,27 +3252,148 @@ function Get-SupportPrinterDetectionChecks {
     $results = @()
     $printers = @(Get-SupportPrinters)
     if ($printers.Count -eq 0) {
-        $results += New-SupportReportObject '检测' '打印机' '打印机' '正常' '未检测到打印机'
+        $results += New-SupportDiagnosticResult '打印机' '打印机' 'PASS' '未检测到打印机' '' ''
         return $results
     }
     foreach ($p in $printers) {
         $mark = ''
         if ($p.IsDefault) { $mark = '（默认）' }
         if ($p.Status -match '离线|停止') {
-            $results += New-SupportReportObject '检测' '打印机' '打印机' '异常' ($p.Name + $mark + '：' + $p.Status)
+            $results += New-SupportDiagnosticResult '打印机' '打印机' 'FAIL' ($p.Name + $mark + '：' + $p.Status) '打印机处于离线或停止状态。' '检查打印机电源、连接、驱动和打印队列，可使用「一键修复打印机」。' ''
         }
         else {
-            $results += New-SupportReportObject '检测' '打印机' '打印机' '正常' ($p.Name + $mark + '：' + $p.Status)
+            $results += New-SupportDiagnosticResult '打印机' '打印机' 'PASS' ($p.Name + $mark + '：' + $p.Status) '' ''
         }
     }
     return $results
 }
 
+function Get-SupportWindowsUpdateChecks {
+    $serviceNames = @('BITS', 'wuauserv', 'cryptSvc', 'msiserver')
+    $missing = @()
+    $disabled = @()
+    $queryErrors = @()
+    foreach ($name in $serviceNames) {
+        try {
+            $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+            if (-not $svc) {
+                $missing += $name
+            }
+            elseif ([string]$svc.StartType -eq 'Disabled') {
+                $disabled += $name
+            }
+        }
+        catch {
+            $queryErrors += $name
+        }
+    }
+    if ($missing.Count -gt 0 -or $disabled.Count -gt 0) {
+        $parts = @()
+        if ($disabled.Count -gt 0) { $parts += ('已禁用：' + ($disabled -join ', ')) }
+        if ($missing.Count -gt 0) { $parts += ('不存在：' + ($missing -join ', ')) }
+        return @(New-SupportDiagnosticResult '系统' 'Windows Update' 'FAIL' ($parts -join '；') 'Windows Update 依赖服务被禁用或缺失。' '在「系统修复 -> Windows Update 服务检查」中确认服务状态，必要时执行基础修复。' '')
+    }
+    if ($queryErrors.Count -gt 0) {
+        return @(New-SupportDiagnosticResult '系统' 'Windows Update' 'WARNING' ('部分服务状态读取失败：' + ($queryErrors -join ', ')) '当前权限或服务查询环境可能受限。' '以管理员身份重新运行并检查 Windows Update 服务。' '')
+    }
+    return @(New-SupportDiagnosticResult '系统' 'Windows Update' 'PASS' 'BITS、Windows Update、Cryptographic Services、Windows Installer 启动配置正常' '' '')
+}
+
+function Get-SupportSystemIntegrityChecks {
+    $systemRoot = $env:WINDIR
+    if (-not $systemRoot) { $systemRoot = $env:SystemRoot }
+    if (-not $systemRoot) {
+        return @(New-SupportDiagnosticResult '系统' '系统文件完整性' 'WARNING' '无法确定 Windows 系统目录' '环境变量 WINDIR/SystemRoot 不可用。' '以正常 Windows 用户环境重新运行工具。' '')
+    }
+
+    $targets = @(
+        (Join-Path $systemRoot 'System32\kernel32.dll'),
+        (Join-Path $systemRoot 'System32\ntdll.dll'),
+        (Join-Path $systemRoot 'System32\services.exe'),
+        (Join-Path $systemRoot 'System32\lsass.exe')
+    )
+    $verified = 0
+    $invalid = @()
+    foreach ($path in $targets) {
+        if (-not (Test-SupportPathExists $path)) { continue }
+        try {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path -ErrorAction Stop
+            if ($signature.Status -eq 'Valid') {
+                $verified++
+            }
+            else {
+                $invalid += ((Split-Path -Leaf $path) + '（' + $signature.Status + '）')
+            }
+        }
+        catch {
+            $invalid += ((Split-Path -Leaf $path) + '（无法验证）')
+        }
+    }
+
+    if ($invalid.Count -gt 0) {
+        return @(New-SupportDiagnosticResult '系统' '系统文件完整性' 'WARNING' ('异常签名：' + ($invalid -join ', ')) '部分关键系统文件的数字签名未能验证，可能是文件损坏、系统版本差异或安全策略影响。' '建议在管理员环境执行「SFC 系统文件检查」或「DISM 系统映像检查」。' '')
+    }
+    if ($verified -eq 0) {
+        return @(New-SupportDiagnosticResult '系统' '系统文件完整性' 'WARNING' '未找到可验证的关键系统文件' '系统目录结构或文件访问权限异常。' '以管理员身份运行 SFC 检查。' '')
+    }
+    return @(New-SupportDiagnosticResult '系统' '系统文件完整性' 'PASS' ('已验证 ' + $verified + ' 个关键系统文件签名') '' '')
+}
+
+function Get-SupportCriticalServiceChecks {
+    $serviceDefs = @(
+        @{ Name = 'EventLog'; Display = 'Windows Event Log'; Required = $true },
+        @{ Name = 'Winmgmt'; Display = 'WMI 服务'; Required = $true },
+        @{ Name = 'Dnscache'; Display = 'DNS Client'; Required = $true },
+        @{ Name = 'LanmanWorkstation'; Display = 'Workstation'; Required = $true },
+        @{ Name = 'Spooler'; Display = 'Print Spooler'; Required = $false }
+    )
+    $printerCount = @(Get-SupportPrinters).Count
+    $failures = @()
+    $warnings = @()
+    $details = @()
+    foreach ($def in $serviceDefs) {
+        try {
+            $svc = Get-Service -Name $def.Name -ErrorAction SilentlyContinue
+            if (-not $svc) {
+                $failures += ($def.Display + '：不存在')
+                continue
+            }
+            $stateText = $def.Display + '：' + $svc.Status
+            $details += $stateText
+            if ($svc.Status -eq 'Running') { continue }
+            if ($def.Name -eq 'Spooler' -and $printerCount -eq 0) {
+                $details += '（当前无打印机，停止状态可接受）'
+                continue
+            }
+            if ($def.Required) {
+                $failures += $stateText
+            }
+            else {
+                $warnings += $stateText
+            }
+        }
+        catch {
+            $failures += ($def.Display + '：无法查询')
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        return @(New-SupportDiagnosticResult '系统' '关键服务' 'FAIL' ($failures -join '；') '一个或多个 Windows 基础服务未运行或不存在。' '检查服务启动类型并尝试启动；必要时重启后重新检测。' '')
+    }
+    if ($warnings.Count -gt 0) {
+        return @(New-SupportDiagnosticResult '系统' '关键服务' 'WARNING' ($warnings -join '；') '部分非核心服务当前未运行。' '结合具体业务和打印机状态进一步检查。' '')
+    }
+    return @(New-SupportDiagnosticResult '系统' '关键服务' 'PASS' ($details -join '；') '' '')
+}
+
 function Get-SupportDetectionAll {
     $all = @()
     $all += Get-SupportComputerDetectionChecks
-    $all += @(Get-SupportNetworkDiagnosis)
     $all += Get-SupportDiskDetectionChecks
+    $all += @(Get-SupportNetworkDiagnosis)
+    $all += Get-SupportWindowsUpdateChecks
+    $all += Get-SupportSystemIntegrityChecks
+    $all += Get-SupportCriticalServiceChecks
     $all += Get-SupportBatteryDetectionChecks
     $all += Get-SupportPrinterDetectionChecks
     return @($all)
@@ -2585,13 +3402,16 @@ function Get-SupportDetectionAll {
 function Get-SupportIssueSuggestion {
     param([string]$Check)
     switch -Regex ($Check) {
-        'DNS解析' { return 'DNS解析可能存在异常。建议进入「网络 -> 网络修复 -> 刷新 DNS」，或检查 DNS 设置。' }
-        'TCP 443' { return 'HTTPS 连接失败，建议进入「网络」进一步诊断（检查代理/防火墙）。' }
+        'DNS' { return 'DNS 解析可能存在异常。建议进入「网络 -> 网络诊断」执行刷新 DNS，或检查 DNS 设置。' }
+        'HTTPS' { return 'HTTPS 连接失败，建议进入「网络 -> 网络诊断」检查代理、防火墙和证书。' }
         'Internet' { return '无法访问公网，建议进入「网络 -> 网络诊断」进一步检查。' }
-        '默认网关' { return '未获取到默认网关，建议进入「网络 -> 网络修复 -> 重新获取 IP」。' }
-        'IP地址' { return '本机没有有效 IP，建议检查网线/Wi-Fi 连接后重新获取 IP。' }
+        '默认网关|网关连通性' { return '默认网关存在异常，建议进入「网络 -> 网络诊断」检查局域网和网关配置。' }
+        'IP 配置' { return '本机没有有效 IP，建议检查网线/Wi-Fi 连接后重新获取 IP。' }
         '网络适配器' { return '网络适配器异常，请检查硬件或驱动。' }
-        '系统磁盘' { return 'C 盘空间使用率较高，建议进入「磁盘」查看空间并清理临时文件。' }
+        'C盘空间' { return 'C 盘空间使用率较高，建议进入「磁盘」查看空间并清理临时文件。' }
+        'Windows Update' { return 'Windows Update 依赖服务异常，建议进入「系统修复 -> Windows Update 服务检查」。' }
+        '系统文件完整性' { return '系统文件签名检查异常，建议在管理员环境执行 SFC 或 DISM 检查。' }
+        '关键服务' { return '关键 Windows 服务异常，建议检查服务启动类型并尝试启动。' }
         '电池' { return '电池电量或健康度需要关注，建议检查电源设置或联系硬件支持。' }
         '打印机' { return '打印机存在异常，建议进入「打印机 -> 一键修复打印机」。' }
         default { return ('"' + $Check + '" 需要进一步检查，可进入对应功能菜单操作。') }
@@ -2601,51 +3421,58 @@ function Get-SupportIssueSuggestion {
 function Write-SupportDetectionResults {
     param($Results)
     foreach ($r in $Results) {
-        $prefix = '[' + $r.Status + ']'
-        switch ($r.Status) {
-            '正常' { Write-Host ($prefix + ' ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Green }
-            '警告' { Write-Host ($prefix + ' ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Yellow }
-            '异常' { Write-Host ($prefix + ' ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Red }
-            default { Write-Host ($prefix + ' ' + $r.Check + ' - ' + $r.Message) -ForegroundColor Gray }
-        }
+        $line = '[' + $r.Status + '] ' + $r.Name
+        if ($r.Result) { $line += '：' + $r.Result }
+        Write-Host $line -ForegroundColor (Get-SupportStatusColor $r.Status)
     }
 }
 
 function Invoke-OneClickCheck {
-    Write-SectionTitle '一键检测'
-    Write-Host '正在检查电脑、网络、磁盘、电池和打印机，请稍候...' -ForegroundColor Gray
+    Write-SectionTitle 'Windows IT Support 快速诊断'
+    Write-Host '正在检查系统、CPU/内存、C盘、网络、Windows Update、关键服务和打印机，请稍候...' -ForegroundColor Gray
     $all = @(Get-SupportDetectionAll)
     Write-Host ''
-    Write-Host '========== 检测结果 ==========' -ForegroundColor Cyan
+    Write-Host '========== 诊断结果 ==========' -ForegroundColor Cyan
     Write-Host ''
     Write-SupportDetectionResults $all
     Write-Host ''
 
-    $problemItems = @($all | Where-Object { $_.Status -eq '异常' })
-    $warnItems = @($all | Where-Object { $_.Status -eq '警告' })
-    $problemCount = $problemItems.Count + $warnItems.Count
+    $problemItems = @($all | Where-Object { $_.Status -eq 'FAIL' -or $_.Status -eq 'WARNING' })
+    $problemCount = $problemItems.Count
     if ($problemCount -eq 0) {
         Write-OkText ('共检测 ' + $all.Count + ' 项，全部正常。')
     }
     else {
-        if ($problemItems.Count -gt 0) {
-            Write-Host ('发现 ' + $problemItems.Count + ' 个问题：') -ForegroundColor Yellow
-            $idx = 1
-            foreach ($p in $problemItems) {
-                Write-Host ('' + $idx + '. ' + $p.Check + '：' + (Get-SupportIssueSuggestion $p.Check))
-                $idx++
+        Write-Host '========== 发现的问题 ==========' -ForegroundColor Cyan
+        Write-Host ''
+        $idx = 1
+        foreach ($item in $problemItems) {
+            $statusColor = Get-SupportStatusColor $item.Status
+            Write-Host ('' + $idx + '. [' + $item.Status + '] ' + $item.Name) -ForegroundColor $statusColor
+            if ($item.Result) {
+                Write-Host ('   结果：' + $item.Result) -ForegroundColor Gray
             }
-        }
-        if ($warnItems.Count -gt 0) {
-            Write-Host ('另有 ' + $warnItems.Count + ' 项警告：') -ForegroundColor Gray
-            $idx = 1
-            foreach ($w in $warnItems) {
-                Write-Host ('' + $idx + '. ' + $w.Check + '：' + (Get-SupportIssueSuggestion $w.Check))
-                $idx++
+            if ($item.Diagnosis) {
+                Write-Host ('   诊断：' + $item.Diagnosis) -ForegroundColor Gray
             }
+            if ($item.Recommendation) {
+                Write-Host ('   建议：' + $item.Recommendation) -ForegroundColor Gray
+            }
+            $idx++
         }
         Write-Host ''
-        Write-Host '可在主菜单选择对应功能进一步处理。' -ForegroundColor Gray
+        $recommendations = @($problemItems | Where-Object { $_.Recommendation } | ForEach-Object { $_.Recommendation } | Select-Object -Unique)
+        if ($recommendations.Count -gt 0) {
+            Write-Host '========== 建议 ==========' -ForegroundColor Cyan
+            Write-Host ''
+            $idx = 1
+            foreach ($recommendation in $recommendations) {
+                Write-Host ('' + $idx + '. ' + $recommendation)
+                $idx++
+            }
+            Write-Host ''
+        }
+        Write-Host '可进入对应功能菜单进一步处理。' -ForegroundColor Gray
     }
     return $all
 }
@@ -2716,7 +3543,7 @@ function Export-SupportReportTxt {
     [void]$sb.AppendLine('===== 网络检测结果 =====')
     $netResults = @($Snapshot.Detection | Where-Object { $_.Category -eq '网络' })
     foreach ($r in $netResults) {
-        [void]$sb.AppendLine('[' + $r.Status + '] ' + $r.Check + ' - ' + $r.Message)
+        [void]$sb.AppendLine('[' + (Get-SupportLegacyStatusText $r.Status) + '] ' + $r.Check + ' - ' + $r.Message)
     }
     [void]$sb.AppendLine('')
 
@@ -2759,13 +3586,26 @@ function Export-SupportReportTxt {
 
     [void]$sb.AppendLine('===== 一键检测结果 =====')
     foreach ($r in $Snapshot.Detection) {
-        [void]$sb.AppendLine('[' + $r.Status + '] ' + $r.Category + '/' + $r.Check + ' - ' + $r.Message)
+        [void]$sb.AppendLine('[' + (Get-SupportLegacyStatusText $r.Status) + '] ' + $r.Category + '/' + $r.Check + ' - ' + $r.Message)
     }
-    $abnormalCount = @($Snapshot.Detection | Where-Object { $_.Status -eq '异常' }).Count
-    $warnCount = @($Snapshot.Detection | Where-Object { $_.Status -eq '警告' }).Count
+    $abnormalCount = @($Snapshot.Detection | Where-Object { $_.Status -eq 'FAIL' }).Count
+    $warnCount = @($Snapshot.Detection | Where-Object { $_.Status -eq 'WARNING' }).Count
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('问题统计：异常 ' + $abnormalCount + ' 项，警告 ' + $warnCount + ' 项')
     [void]$sb.AppendLine('')
+
+    [void]$sb.AppendLine('===== V1.1 结构化诊断结果 =====')
+    foreach ($r in $Snapshot.Detection) {
+        [void]$sb.AppendLine('[' + $r.Status + '] ' + $r.Category + '/' + $r.Name)
+        [void]$sb.AppendLine('结果：' + $r.Result)
+        if ($r.Diagnosis) {
+            [void]$sb.AppendLine('诊断：' + $r.Diagnosis)
+        }
+        if ($r.Recommendation) {
+            [void]$sb.AppendLine('建议：' + $r.Recommendation)
+        }
+        [void]$sb.AppendLine('')
+    }
     [void]$sb.AppendLine('（本报告不包含密码、Cookie、Token 等敏感信息）')
 
     try {
@@ -2941,5 +3781,7 @@ function Show-MainMenu {
     }
 }
 
-Initialize-Toolkit
-Show-MainMenu
+if ($MyInvocation.InvocationName -ne '.') {
+    Initialize-Toolkit
+    Show-MainMenu
+}
