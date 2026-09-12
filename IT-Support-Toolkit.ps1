@@ -4224,29 +4224,190 @@ function Get-SupportPrimaryProblem {
     return $null
 }
 
-function Show-SupportFullDiagnosisDetails {
-    param($Session)
-    Write-SupportUiHeader '诊断详情'
-    foreach ($category in @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')) {
-        $status = [string]$Session.CategoryStatuses[$category]
-        Write-Host ('[' + $status + '] ' + $category) -ForegroundColor (Get-SupportUiStatusColor $status)
-        $items = @($Session.Results | Where-Object { (Get-SupportUiCategory $_) -eq $category })
-        foreach ($item in $items) {
+function Update-SupportDiagnosticSessionCategory {
+    param(
+        [string]$Category,
+        $Results
+    )
+    $otherResults = @()
+    if ($script:DiagnosticSession) {
+        $otherResults = @($script:DiagnosticSession.Results | Where-Object { (Get-SupportUiCategory $_) -ne $Category })
+    }
+    return Set-SupportDiagnosticSession @($otherResults + @($Results))
+}
+
+function Invoke-SupportCategoryDiagnosis {
+    param([string]$Category)
+    $results = @()
+    switch ($Category) {
+        '设备' {
+            try {
+                $computerResults = @()
+                $computerResults += @(Get-SupportComputerDetectionChecks)
+                $computerResults += @(Get-SupportBatteryDetectionChecks)
+                $results = @($computerResults | Where-Object { (Get-SupportUiCategory $_) -eq '设备' })
+            }
+            catch {
+                $results = Get-SupportDiagnosisModuleFailure '电脑' '设备检测' $_.Exception.Message
+            }
+        }
+        'Windows' {
+            try {
+                $computerResults = @(Get-SupportComputerDetectionChecks)
+                $results = @($computerResults | Where-Object { (Get-SupportUiCategory $_) -eq 'Windows' })
+            }
+            catch {
+                $results = Get-SupportDiagnosisModuleFailure '电脑' 'Windows 系统' $_.Exception.Message
+            }
+        }
+        '系统' {
+            try {
+                $results += @(Get-SupportWindowsUpdateChecks)
+                $results += @(Get-SupportSystemIntegrityChecks)
+                $results += @(Get-SupportCriticalServiceChecks)
+            }
+            catch {
+                $results = Get-SupportDiagnosisModuleFailure '系统' '系统检测' $_.Exception.Message
+            }
+        }
+        '磁盘' {
+            try { $results = @(Get-SupportDiskDetectionChecks) }
+            catch { $results = Get-SupportDiagnosisModuleFailure '磁盘' '磁盘检测' $_.Exception.Message }
+        }
+        '网络' {
+            try { $results = @(Get-SupportNetworkDiagnosis) }
+            catch { $results = Get-SupportDiagnosisModuleFailure '网络' '网络检测' $_.Exception.Message }
+        }
+        '打印机' {
+            try { $results = @(Get-SupportPrinterDetectionChecks) }
+            catch { $results = Get-SupportDiagnosisModuleFailure '打印机' '打印机检测' $_.Exception.Message }
+        }
+    }
+    if ($results.Count -eq 0) {
+        $results = Get-SupportDiagnosisModuleFailure $Category ($Category + '检测') '未返回检测结果'
+    }
+    return @(Update-SupportDiagnosticSessionCategory $Category $results)
+}
+
+function Test-SupportCategoryHasRepair {
+    param([string]$Category)
+    switch ($Category) {
+        '网络' { return $true }
+        '打印机' { return $true }
+        '系统' { return $true }
+        'Windows' { return $true }
+        '磁盘' { return $true }
+        default { return $false }
+    }
+}
+
+function Show-SupportCategoryDetail {
+    param([string]$Category)
+    while ($true) {
+        $results = @(Get-SupportSessionCategoryResults $Category)
+        if ($results.Count -eq 0) {
+            Write-SupportUiHeader ($Category + '状态')
+            Write-Host '[未检测] 当前分类尚未检测' -ForegroundColor Gray
+            Write-Host ''
+            Write-Host '[1] 开始检测'
+            Write-Host '[0] 返回'
+            Write-Host ''
+            $choice = Read-MenuSelection 1
+            if ($choice -eq 0) { return }
+            $null = Invoke-SupportCategoryDiagnosis $Category
+            continue
+        }
+
+        $status = Get-SupportUiCategoryStatus $results
+        Write-SupportUiHeader ($Category + '状态')
+        Write-Host ('[' + $status + '] ' + $Category + '总体状态') -ForegroundColor (Get-SupportUiStatusColor $status)
+        Write-Host ''
+        foreach ($item in $results) {
             $itemStatus = Get-SupportUiItemStatus $item
-            Write-Host ('  [' + $itemStatus + '] ' + $item.Name)
-            if ($item.Result -and $itemStatus -ne '正常') {
-                Write-Host ('    结果：' + $item.Result) -ForegroundColor Gray
-            }
-            if ($item.Diagnosis -and $itemStatus -ne '正常') {
-                Write-Host ('    诊断：' + $item.Diagnosis) -ForegroundColor Gray
-            }
-            if ($item.Recommendation) {
-                Write-Host ('    建议：' + $item.Recommendation) -ForegroundColor Gray
+            Write-Host ('[' + $itemStatus + '] ' + $item.Name) -ForegroundColor (Get-SupportUiStatusColor $itemStatus)
+            if ($itemStatus -ne '正常') {
+                if ($item.Result) { Write-Host ('  结果：' + $item.Result) -ForegroundColor Gray }
+                if ($item.Diagnosis) { Write-Host ('  诊断：' + $item.Diagnosis) -ForegroundColor Gray }
+                if ($item.Recommendation) { Write-Host ('  建议：' + $item.Recommendation) -ForegroundColor Gray }
             }
         }
         Write-Host ''
+        if ($status -eq '正常') {
+            Write-Host '当前分类未发现需要处理的问题。' -ForegroundColor Green
+        }
+
+        $hasRepair = Test-SupportCategoryHasRepair $Category
+        Write-Host ''
+        Write-Host '[1] 重新检测'
+        if ($hasRepair) { Write-Host '[2] 打开相关修复工具' }
+        Write-Host '[3] 技术详情'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 3
+        switch ($choice) {
+            1 {
+                Write-Host ''
+                Write-Host ('正在重新检测' + $Category + '...') -ForegroundColor Gray
+                $null = Invoke-SupportCategoryDiagnosis $Category
+                continue
+            }
+            2 {
+                if (-not $hasRepair) { continue }
+                switch ($Category) {
+                    '网络' { Show-NetworkRepairMenu }
+                    '打印机' { Show-PrinterMenu }
+                    '系统' { Show-SystemRepairMenu }
+                    'Windows' { Show-SystemRepairMenu }
+                    '磁盘' { Show-DiskMenu }
+                }
+                $null = Invoke-SupportCategoryDiagnosis $Category
+                continue
+            }
+            3 {
+                Write-SupportUiHeader ($Category + '技术详情')
+                foreach ($item in $results) {
+                    Write-Host ('项目：' + $item.Name)
+                    Write-Host ('状态：' + $item.Status)
+                    Write-Host ('结果：' + $item.Result)
+                    if ($item.AccessMode) { Write-Host ('访问方式：' + $item.AccessMode) }
+                    if ($item.ActionCode) { Write-Host ('动作代码：' + $item.ActionCode) }
+                    Write-Host ''
+                }
+                if ($Category -eq '网络') {
+                    Write-Host '当前缓存未保存 InterfaceIndex / RouteMetric / InterfaceMetric。' -ForegroundColor Gray
+                    Write-Host '网络信息页面可查看当前适配器和 IP 配置。' -ForegroundColor Gray
+                }
+                Write-PressAnyKeyToReturn
+                continue
+            }
+            0 { return }
+        }
     }
-    Write-PressAnyKeyToReturn
+}
+
+function Show-SupportCategoryList {
+    while ($true) {
+        Write-SupportUiHeader '分类状态'
+        $categories = @('网络', '系统', '磁盘', 'Windows', '打印机', '设备')
+        $idx = 1
+        foreach ($category in $categories) {
+            $results = @(Get-SupportSessionCategoryResults $category)
+            $status = Get-SupportUiCategoryStatus $results
+            Write-Host ('[' + $idx + '] ' + $category + '  [' + $status + ']') -ForegroundColor (Get-SupportUiStatusColor $status)
+            $idx++
+        }
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection $categories.Count
+        if ($choice -eq 0) { return }
+        Show-SupportCategoryDetail $categories[$choice - 1]
+    }
+}
+
+function Show-SupportFullDiagnosisDetails {
+    param($Session)
+    Write-SupportUiHeader '诊断详情'
+    Show-SupportCategoryList
 }
 
 function Show-SupportFullDiagnosisResult {
@@ -4357,9 +4518,7 @@ function Show-SupportDashboard {
                 Show-SupportFullDiagnosisResult $session
             }
             3 {
-                Write-Host ''
-                Write-Host '分类详细页面将在后续阶段接入。' -ForegroundColor Yellow
-                Write-PressAnyKeyToReturn
+                Show-SupportCategoryList
             }
             0 { return }
         }
