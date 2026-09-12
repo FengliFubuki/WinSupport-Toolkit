@@ -4095,6 +4095,213 @@ function Write-SupportDashboardStatus {
     Write-Host ($Label + (' ' * $padding) + '[' + $Status + ']') -ForegroundColor (Get-SupportUiStatusColor $Status)
 }
 
+function Show-SupportDiagnosisProgress {
+    param($States)
+    Write-SupportUiHeader '全面诊断'
+    Write-Host '正在检查电脑...' -ForegroundColor Cyan
+    Write-Host ''
+    foreach ($step in @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')) {
+        $state = [string]$States[$step]
+        switch ($state) {
+            '完成' { Write-Host ('[完成] ' + $step) -ForegroundColor Green }
+            '进行' { Write-Host ('[进行] ' + $step) -ForegroundColor Yellow }
+            '失败' { Write-Host ('[失败] ' + $step) -ForegroundColor Red }
+            default { Write-Host ('[等待] ' + $step) -ForegroundColor Gray }
+        }
+    }
+    Write-Host ''
+}
+
+function Get-SupportDiagnosisModuleFailure {
+    param(
+        [string]$Category,
+        [string]$Name,
+        [string]$Message
+    )
+    return @(New-SupportDiagnosticResult $Category $Name 'FAIL' ('检测未完成：' + $Message) '该检测项发生未处理错误，其他检测项仍会继续。' '重新运行全面诊断；如持续失败，请查看日志。' '')
+}
+
+function Invoke-SupportFullDiagnosis {
+    $steps = @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')
+    $states = [ordered]@{}
+    foreach ($step in $steps) { $states[$step] = '等待' }
+    $allResults = @()
+
+    Show-SupportDiagnosisProgress $states
+
+    $states['设备'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    $computerResults = @()
+    try {
+        $computerResults += @(Get-SupportComputerDetectionChecks)
+        $computerResults += @(Get-SupportBatteryDetectionChecks)
+    }
+    catch {
+        $computerResults += Get-SupportDiagnosisModuleFailure '电脑' '设备检测' $_.Exception.Message
+    }
+    $deviceResults = @($computerResults | Where-Object { (Get-SupportUiCategory $_) -eq '设备' })
+    if ($deviceResults.Count -eq 0) {
+        $deviceResults = Get-SupportDiagnosisModuleFailure '电脑' '设备检测' '未返回设备检测结果'
+    }
+    $allResults += $deviceResults
+    $states['设备'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $states['Windows'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    $windowsResults = @($computerResults | Where-Object { (Get-SupportUiCategory $_) -eq 'Windows' })
+    if ($windowsResults.Count -eq 0) {
+        $windowsResults = Get-SupportDiagnosisModuleFailure '电脑' 'Windows 系统' '未返回 Windows 状态结果'
+    }
+    $allResults += $windowsResults
+    $states['Windows'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $states['系统'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    try {
+        $allResults += @(Get-SupportWindowsUpdateChecks)
+        $allResults += @(Get-SupportSystemIntegrityChecks)
+        $allResults += @(Get-SupportCriticalServiceChecks)
+    }
+    catch {
+        $allResults += Get-SupportDiagnosisModuleFailure '系统' '系统检测' $_.Exception.Message
+    }
+    $states['系统'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $states['磁盘'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    try {
+        $allResults += @(Get-SupportDiskDetectionChecks)
+    }
+    catch {
+        $allResults += Get-SupportDiagnosisModuleFailure '磁盘' '磁盘检测' $_.Exception.Message
+    }
+    $states['磁盘'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $states['网络'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    try {
+        $allResults += @(Get-SupportNetworkDiagnosis)
+    }
+    catch {
+        $allResults += Get-SupportDiagnosisModuleFailure '网络' '网络检测' $_.Exception.Message
+    }
+    $states['网络'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $states['打印机'] = '进行'
+    Show-SupportDiagnosisProgress $states
+    try {
+        $allResults += @(Get-SupportPrinterDetectionChecks)
+    }
+    catch {
+        $allResults += Get-SupportDiagnosisModuleFailure '打印机' '打印机检测' $_.Exception.Message
+    }
+    $states['打印机'] = '完成'
+    Show-SupportDiagnosisProgress $states
+
+    $session = Set-SupportDiagnosticSession $allResults
+    return $session
+}
+
+function Write-SupportUiCategorySummary {
+    param($Session)
+    foreach ($category in @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')) {
+        Write-SupportDashboardStatus $category ([string]$Session.CategoryStatuses[$category])
+    }
+}
+
+function Get-SupportPrimaryProblem {
+    param($Results)
+    $problem = @($Results | Where-Object { $_.Status -eq 'FAIL' } | Select-Object -First 1)
+    if ($problem.Count -eq 0) {
+        $problem = @($Results | Where-Object { $_.Status -eq 'WARNING' } | Select-Object -First 1)
+    }
+    if ($problem.Count -gt 0) { return $problem[0] }
+    return $null
+}
+
+function Show-SupportFullDiagnosisDetails {
+    param($Session)
+    Write-SupportUiHeader '诊断详情'
+    foreach ($category in @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')) {
+        $status = [string]$Session.CategoryStatuses[$category]
+        Write-Host ('[' + $status + '] ' + $category) -ForegroundColor (Get-SupportUiStatusColor $status)
+        $items = @($Session.Results | Where-Object { (Get-SupportUiCategory $_) -eq $category })
+        foreach ($item in $items) {
+            $itemStatus = Get-SupportUiItemStatus $item
+            Write-Host ('  [' + $itemStatus + '] ' + $item.Name)
+            if ($item.Result -and $itemStatus -ne '正常') {
+                Write-Host ('    结果：' + $item.Result) -ForegroundColor Gray
+            }
+            if ($item.Diagnosis -and $itemStatus -ne '正常') {
+                Write-Host ('    诊断：' + $item.Diagnosis) -ForegroundColor Gray
+            }
+            if ($item.Recommendation) {
+                Write-Host ('    建议：' + $item.Recommendation) -ForegroundColor Gray
+            }
+        }
+        Write-Host ''
+    }
+    Write-PressAnyKeyToReturn
+}
+
+function Show-SupportFullDiagnosisResult {
+    param($Session)
+    while ($true) {
+        Write-SupportUiHeader '全面诊断结果'
+        Write-Host ('[' + $Session.OverallStatus + '] 电脑状态') -ForegroundColor (Get-SupportUiStatusColor $Session.OverallStatus)
+        Write-Host ('最近检查：' + $Session.GeneratedAt.ToString('HH:mm')) -ForegroundColor Gray
+        Write-Host ''
+        Write-SupportUiCategorySummary $Session
+        Write-Host ''
+
+        if ($Session.ProblemCount -eq 0 -and $Session.AttentionCount -eq 0) {
+            Write-Host '未发现需要立即处理的问题。' -ForegroundColor Green
+            Write-Host ''
+            Write-Host '[1] 查看详细结果'
+            Write-Host '[0] 返回'
+            Write-Host ''
+            $choice = Read-MenuSelection 1
+            if ($choice -eq 0) { return }
+            Show-SupportFullDiagnosisDetails $Session
+            continue
+        }
+
+        $primaryProblem = Get-SupportPrimaryProblem $Session.Results
+        Write-Host ('发现 ' + $Session.ProblemCount + ' 个问题，' + $Session.AttentionCount + ' 项注意。') -ForegroundColor Yellow
+        if ($primaryProblem) {
+            Write-Host ''
+            Write-Host ((Get-SupportUiCategory $primaryProblem))
+            Write-Host $primaryProblem.Result
+            if ($primaryProblem.Diagnosis) {
+                Write-Host ('诊断：' + $primaryProblem.Diagnosis) -ForegroundColor Gray
+            }
+            if ($primaryProblem.Recommendation) {
+                Write-Host ('建议：' + $primaryProblem.Recommendation) -ForegroundColor Gray
+            }
+        }
+        Write-Host ''
+        Write-Host '[1] 处理问题'
+        Write-Host '[2] 查看详细结果'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 2
+        switch ($choice) {
+            1 {
+                Write-Host ''
+                Write-Host '修复流程将在后续阶段接入。' -ForegroundColor Yellow
+                Write-PressAnyKeyToReturn
+            }
+            2 { Show-SupportFullDiagnosisDetails $Session }
+            0 { return }
+        }
+    }
+}
+
 function Show-SupportDashboard {
     while ($true) {
         Write-SupportUiHeader '总览'
@@ -4116,9 +4323,8 @@ function Show-SupportDashboard {
             $choice = Read-MenuSelection 1
             switch ($choice) {
                 1 {
-                    Write-Host ''
-                    Write-Host '全面诊断将在下一阶段接入。' -ForegroundColor Yellow
-                    Write-PressAnyKeyToReturn
+                    $session = Invoke-SupportFullDiagnosis
+                    Show-SupportFullDiagnosisResult $session
                 }
                 0 { return }
             }
@@ -4144,14 +4350,11 @@ function Show-SupportDashboard {
         $choice = Read-MenuSelection 3
         switch ($choice) {
             1 {
-                Write-Host ''
-                Write-Host '本次结果页面将在下一阶段接入。' -ForegroundColor Yellow
-                Write-PressAnyKeyToReturn
+                Show-SupportFullDiagnosisResult $script:DiagnosticSession
             }
             2 {
-                Write-Host ''
-                Write-Host '全面诊断将在下一阶段接入。' -ForegroundColor Yellow
-                Write-PressAnyKeyToReturn
+                $session = Invoke-SupportFullDiagnosis
+                Show-SupportFullDiagnosisResult $session
             }
             3 {
                 Write-Host ''
