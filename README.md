@@ -33,6 +33,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 
 ## 功能一览
 
+- 三区域 UI：总览、工具箱、报告；打开后先显示电脑整体状态，再进入具体工具
+- 全面诊断：按设备、Windows、系统、磁盘、网络、打印机顺序执行，并保存本次会话结果
+- 分类详情：Dashboard 与详细页共享同一次诊断缓存，分类重新检测前不会重复执行检测
 - 一键诊断：系统、CPU/内存、C盘、网络、Windows Update、系统文件签名、关键服务、电池和打印机综合检查
 - 网络诊断：网卡连接状态、MAC、IPv4、子网掩码、DHCP、DNS、网关、公网、DNS 解析和 HTTPS/TLS
 - 代理感知：识别 Windows 系统代理、WinHTTP 代理和 VPN/TUN；公网直连失败不会单独归因于网卡故障
@@ -44,6 +47,30 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 - 软件：winget 搜索 / 安装 / 卸载 / 更新 / 已安装列表，常用软件快捷安装
 - 电脑信息：CIM/WMI 读取硬件与系统信息
 - 导出报告：TXT / JSON，自动保存到 `reports\`；TXT 保留 V1.0 格式并增加结构化诊断段落
+
+## UI 导航
+
+```text
+[1] 总览
+    ├─ 全面诊断
+    ├─ 本次结果
+    └─ 分类详细状态
+
+[2] 工具箱
+    ├─ 网络
+    ├─ 打印机
+    ├─ 系统
+    ├─ 磁盘
+    ├─ 软件
+    └─ 设备
+
+[3] 报告
+    ├─ 本次诊断结果
+    ├─ 历史报告
+    └─ 导出 TXT / JSON
+```
+
+诊断结果只保存在当前程序进程中，程序退出后清除，不创建永久状态文件。
 
 ## 测试
 

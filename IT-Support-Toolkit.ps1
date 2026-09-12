@@ -4019,6 +4019,7 @@ function Get-SupportUiCategory {
 
 function Get-SupportUiItemStatus {
     param($Result)
+    if ($Result.Result -match '未检测到打印机') { return '未检测' }
     switch ([string]$Result.Status) {
         'FAIL' { return '问题' }
         'WARNING' { return '注意' }
@@ -4045,8 +4046,10 @@ function Get-SupportUiCategoryStatus {
     param($Results)
     $items = @($Results)
     if ($items.Count -eq 0) { return '未检测' }
-    if (@($items | Where-Object { $_.Status -eq 'FAIL' }).Count -gt 0) { return '问题' }
-    if (@($items | Where-Object { $_.Status -eq 'WARNING' }).Count -gt 0) { return '注意' }
+    $itemStatuses = @($items | ForEach-Object { Get-SupportUiItemStatus $_ })
+    if ($itemStatuses -contains '问题') { return '问题' }
+    if ($itemStatuses -contains '注意') { return '注意' }
+    if (@($itemStatuses | Where-Object { $_ -ne '未检测' }).Count -eq 0) { return '未检测' }
     return '正常'
 }
 
@@ -4067,17 +4070,18 @@ function New-SupportDiagnosticSession {
     elseif (@($categoryStatuses.Values | Where-Object { $_ -eq '注意' }).Count -gt 0) {
         $overallStatus = '注意'
     }
-    elseif (@($categoryStatuses.Values | Where-Object { $_ -ne '未检测' }).Count -eq 0) {
+    elseif (@($categoryStatuses.Values | Where-Object { $_ -eq '未检测' }).Count -gt 0) {
         $overallStatus = '未检测'
     }
 
+    $uiItemStatuses = @($allResults | ForEach-Object { Get-SupportUiItemStatus $_ })
     return [pscustomobject]@{
         Results          = @($allResults)
         GeneratedAt      = Get-Date
         OverallStatus    = $overallStatus
         CategoryStatuses = $categoryStatuses
-        ProblemCount     = @($allResults | Where-Object { $_.Status -eq 'FAIL' }).Count
-        AttentionCount   = @($allResults | Where-Object { $_.Status -eq 'WARNING' }).Count
+        ProblemCount     = @($uiItemStatuses | Where-Object { $_ -eq '问题' }).Count
+        AttentionCount   = @($uiItemStatuses | Where-Object { $_ -eq '注意' }).Count
     }
 }
 
@@ -4229,7 +4233,7 @@ function Get-SupportPrimaryProblem {
     param($Results)
     $problem = @($Results | Where-Object { $_.Status -eq 'FAIL' } | Select-Object -First 1)
     if ($problem.Count -eq 0) {
-        $problem = @($Results | Where-Object { $_.Status -eq 'WARNING' } | Select-Object -First 1)
+        $problem = @($Results | Where-Object { (Get-SupportUiItemStatus $_) -eq '注意' } | Select-Object -First 1)
     }
     if ($problem.Count -gt 0) { return $problem[0] }
     return $null
@@ -4627,7 +4631,13 @@ function Show-SupportDashboard {
         }
 
         $session = $script:DiagnosticSession
-        Write-Host ('[' + $session.OverallStatus + '] 电脑状态') -ForegroundColor (Get-SupportUiStatusColor $session.OverallStatus)
+        $overallText = switch ($session.OverallStatus) {
+            '正常' { '电脑运行正常' }
+            '注意' { '电脑需要关注' }
+            '问题' { '电脑发现问题' }
+            default { '电脑尚未完成全面诊断' }
+        }
+        Write-Host ('[' + $session.OverallStatus + '] ' + $overallText) -ForegroundColor (Get-SupportUiStatusColor $session.OverallStatus)
         Write-Host ('最近检查：' + $session.GeneratedAt.ToString('HH:mm')) -ForegroundColor Gray
         if ($session.ProblemCount -gt 0 -or $session.AttentionCount -gt 0) {
             Write-Host ('问题 ' + $session.ProblemCount + ' 项，注意 ' + $session.AttentionCount + ' 项') -ForegroundColor Gray
@@ -4659,6 +4669,25 @@ function Show-SupportDashboard {
     }
 }
 
+function Show-SupportDeviceToolbox {
+    while ($true) {
+        Write-SupportUiHeader '设备'
+        Write-Host '[1] PC 信息'
+        Write-Host '[2] 设备状态'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 2
+        switch ($choice) {
+            1 {
+                Show-SupportComputerInfo
+                Write-PressAnyKeyToReturn
+            }
+            2 { Show-SupportCategoryDetail '设备' }
+            0 { return }
+        }
+    }
+}
+
 function Show-SupportToolbox {
     while ($true) {
         Write-SupportUiHeader '工具箱'
@@ -4678,10 +4707,7 @@ function Show-SupportToolbox {
             3 { Show-SystemRepairMenu }
             4 { Show-DiskMenu }
             5 { Show-SoftwareMenu }
-            6 {
-                Show-SupportComputerInfo
-                Write-PressAnyKeyToReturn
-            }
+            6 { Show-SupportDeviceToolbox }
             0 { return }
         }
     }
