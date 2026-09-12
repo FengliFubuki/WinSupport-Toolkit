@@ -4019,7 +4019,6 @@ function Get-SupportUiCategory {
 
 function Get-SupportUiItemStatus {
     param($Result)
-    if ($Result.Result -match '未检测到打印机') { return '未检测' }
     switch ([string]$Result.Status) {
         'FAIL' { return '问题' }
         'WARNING' { return '注意' }

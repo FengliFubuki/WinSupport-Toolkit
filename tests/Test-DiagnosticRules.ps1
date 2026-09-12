@@ -177,9 +177,19 @@ Assert-Equal '正常' (Get-SupportUiItemStatus $normalResults[0]) 'UI 聚合：P
 $normalSession = New-SupportDiagnosticSession $normalResults
 Assert-Equal '正常' $normalSession.CategoryStatuses['网络'] 'UI 聚合：网络会话状态正确'
 Assert-Equal '未检测' $normalSession.CategoryStatuses['系统'] 'UI 聚合：无结果分类为未检测'
+$allCategoryResults = @(
+    New-SupportDiagnosticResult '电脑' 'Windows 系统' 'PASS' 'Windows 正常' '' ''
+    New-SupportDiagnosticResult '电脑' 'CPU' 'PASS' 'CPU 正常' '' ''
+    New-SupportDiagnosticResult '系统' '关键服务' 'PASS' '服务正常' '' ''
+    New-SupportDiagnosticResult '磁盘' 'C盘空间' 'PASS' '磁盘正常' '' ''
+    New-SupportDiagnosticResult '网络' '网络适配器' 'PASS' '网络正常' '' ''
+    New-SupportDiagnosticResult '打印机' '打印机' 'PASS' '未检测到打印机' '' ''
+)
+$allNormalSession = New-SupportDiagnosticSession $allCategoryResults
+Assert-Equal '正常' $allNormalSession.OverallStatus 'UI 聚合：完整正常结果总体为正常'
 $noPrinterResult = New-SupportDiagnosticResult '打印机' '打印机' 'PASS' '未检测到打印机' '' ''
 $proxyAttentionResult = New-SupportDiagnosticResult '网络' '代理设置' 'INFO' '系统代理：已启用' '' ''
-Assert-Equal '未检测' (Get-SupportUiItemStatus $noPrinterResult) 'UI 聚合：未接入打印机映射为未检测'
+Assert-Equal '正常' (Get-SupportUiItemStatus $noPrinterResult) 'UI 聚合：未接入打印机仍属正常'
 Assert-Equal '注意' (Get-SupportUiItemStatus $proxyAttentionResult) 'UI 聚合：代理配置映射为注意'
 $tunnelAdapter = New-TestAdapter -Name 'Test Tunnel' -MediaType 'Tunnel' -IsVirtual $true
 Assert-Equal $true (Test-SupportVpnOrTunnelAdapter $tunnelAdapter) 'VPN/TUN：按接口类型识别'
