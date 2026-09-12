@@ -1889,11 +1889,14 @@ function Get-SupportNetworkRecommendedAction {
 }
 
 function Invoke-SupportNetworkRecommendedAction {
-    param($Action)
+    param(
+        $Action,
+        [switch]$SkipConfirmation
+    )
     switch ($Action.Code) {
         'FlushDns' { return [bool](Invoke-NetworkFlushDns) }
-        'RenewIp' { return [bool](Invoke-NetworkRenewIp) }
-        'RestartAdapter' { return [bool](Invoke-NetworkRestartAdapter) }
+        'RenewIp' { return [bool](Invoke-NetworkRenewIp -SkipConfirmation:$SkipConfirmation) }
+        'RestartAdapter' { return [bool](Invoke-NetworkRestartAdapter -SkipConfirmation:$SkipConfirmation) }
         default { return $false }
     }
 }
@@ -2018,8 +2021,9 @@ function Invoke-NetworkFlushDns {
 }
 
 function Invoke-NetworkRenewIp {
+    param([switch]$SkipConfirmation)
     Write-SubTitle '重新获取 IP'
-    if (-not (Get-SupportConfirmation '此操作会短暂断开网络并重新获取 IP。是否继续？')) {
+    if (-not $SkipConfirmation -and -not (Get-SupportConfirmation '此操作会短暂断开网络并重新获取 IP。是否继续？')) {
         Write-NoticeText '操作已取消。'
         return $false
     }
@@ -2110,6 +2114,7 @@ function Get-SupportDefaultNetworkAdapter {
 }
 
 function Invoke-NetworkRestartAdapter {
+    param([switch]$SkipConfirmation)
     Write-SubTitle '重启网络适配器'
     $ad = Get-SupportDefaultNetworkAdapter
     if (-not $ad) {
@@ -2118,7 +2123,7 @@ function Invoke-NetworkRestartAdapter {
     }
     Write-Host ('将重启网卡：' + $ad.Name + '（' + $ad.InterfaceDescription + '）')
     Write-Host '重启过程中网络会暂时断开。' -ForegroundColor Yellow
-    if (-not (Get-SupportConfirmation '是否继续？')) {
+    if (-not $SkipConfirmation -and -not (Get-SupportConfirmation '是否继续？')) {
         Write-NoticeText '操作已取消。'
         return $false
     }
@@ -4404,6 +4409,131 @@ function Show-SupportCategoryList {
     }
 }
 
+function Get-SupportNetworkRepairTargetName {
+    param([string]$ActionCode)
+    switch ($ActionCode) {
+        'FlushDns' { return 'DNS 解析' }
+        'RenewIp' { return 'IP 配置' }
+        'RestartAdapter' { return '网络适配器' }
+        default { return '' }
+    }
+}
+
+function Invoke-SupportGuidedNetworkRepair {
+    $results = @(Get-SupportSessionCategoryResults '网络')
+    $action = Get-SupportNetworkRecommendedAction $results
+    if (-not $action) {
+        Write-SupportUiHeader '处理网络问题'
+        Write-WarnText '当前没有可自动执行的网络修复建议。'
+        Write-PressAnyKeyToReturn
+        return
+    }
+
+    $targetName = Get-SupportNetworkRepairTargetName $action.Code
+    $target = $results | Where-Object { $_.Name -eq $targetName } | Select-Object -First 1
+    Write-SupportUiHeader '处理网络问题'
+    Write-Host ('[问题] ' + $targetName) -ForegroundColor Red
+    if ($target -and $target.Result) {
+        Write-Host ('结果：' + $target.Result) -ForegroundColor Gray
+    }
+    if ($target -and $target.Diagnosis) {
+        Write-Host ('诊断：' + $target.Diagnosis) -ForegroundColor Gray
+    }
+    if ($target -and $target.Recommendation) {
+        Write-Host ('建议：' + $target.Recommendation) -ForegroundColor Gray
+    }
+    Write-Host ''
+    if (-not (Get-SupportConfirmation '是否执行修复？')) {
+        Write-NoticeText '操作已取消。'
+        Write-PressAnyKeyToReturn
+        return
+    }
+
+    Write-Host ''
+    Write-Host '正在修复...' -ForegroundColor Cyan
+    $fixOk = Invoke-SupportNetworkRecommendedAction -Action $action -SkipConfirmation
+    if ($fixOk) {
+        Write-Host ('[完成] ' + $action.MenuText.Replace('执行建议修复：', '')) -ForegroundColor Green
+    }
+    else {
+        Write-Host '[注意] 修复命令未成功完成' -ForegroundColor Yellow
+    }
+
+    Write-Host ''
+    Write-Host '正在重新检测...' -ForegroundColor Cyan
+    $newResults = @(Get-SupportNetworkDiagnosis)
+    $null = Update-SupportDiagnosticSessionCategory '网络' $newResults
+    $newTarget = $newResults | Where-Object { $_.Name -eq $targetName } | Select-Object -First 1
+    if ($newTarget) {
+        $newStatus = Get-SupportUiItemStatus $newTarget
+        Write-Host ('[' + $newStatus + '] ' + $newTarget.Name) -ForegroundColor (Get-SupportUiStatusColor $newStatus)
+        if ($newTarget.Result) { Write-Host ('结果：' + $newTarget.Result) -ForegroundColor Gray }
+    }
+
+    $beforeFailures = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
+    $afterFailures = @($newResults | Where-Object { $_.Status -eq 'FAIL' }).Count
+    Write-Host ''
+    if ($beforeFailures -gt 0 -and $afterFailures -eq 0) {
+        Write-Host '[正常] 问题已解决' -ForegroundColor Green
+    }
+    elseif ($afterFailures -lt $beforeFailures) {
+        Write-Host '[注意] 部分问题已解决，仍有异常项需要处理。' -ForegroundColor Yellow
+    }
+    elseif ($fixOk) {
+        Write-Host '[注意] 修复操作已执行，但问题仍然存在。' -ForegroundColor Yellow
+    }
+    else {
+        Write-Host '[注意] 修复未成功完成，问题仍然存在。' -ForegroundColor Yellow
+    }
+    Write-PressAnyKeyToReturn
+}
+
+function Invoke-SupportGuidedProblemRepair {
+    $problem = Get-SupportPrimaryProblem $script:DiagnosticSession.Results
+    if (-not $problem) {
+        Write-WarnText '当前没有需要处理的诊断问题。'
+        Write-PressAnyKeyToReturn
+        return
+    }
+    $category = Get-SupportUiCategory $problem
+    if ($category -eq '网络') {
+        Invoke-SupportGuidedNetworkRepair
+        return
+    }
+
+    Write-SupportUiHeader '处理问题'
+    Write-Host ('[' + $category + '] ' + $problem.Name) -ForegroundColor Red
+    if ($problem.Result) { Write-Host ('结果：' + $problem.Result) -ForegroundColor Gray }
+    if ($problem.Diagnosis) { Write-Host ('诊断：' + $problem.Diagnosis) -ForegroundColor Gray }
+    if ($problem.Recommendation) { Write-Host ('建议：' + $problem.Recommendation) -ForegroundColor Gray }
+    Write-Host ''
+    Write-Host '将打开该分类已有的修复工具；修复命令自身会再次确认具体操作。' -ForegroundColor Gray
+    Write-PressAnyKeyToReturn
+
+    switch ($category) {
+        '打印机' { Invoke-SupportPrinterOneKeyFix }
+        '系统' { Show-SystemRepairMenu }
+        'Windows' { Show-SystemRepairMenu }
+        '磁盘' { Show-DiskMenu }
+        default { Show-SupportCategoryDetail $category; return }
+    }
+
+    Write-Host ''
+    Write-Host '正在重新检测...' -ForegroundColor Cyan
+    $null = Invoke-SupportCategoryDiagnosis $category
+    $newResults = @(Get-SupportSessionCategoryResults $category)
+    $newStatus = Get-SupportUiCategoryStatus $newResults
+    Write-Host ''
+    Write-Host ('[' + $newStatus + '] ' + $category + '当前状态') -ForegroundColor (Get-SupportUiStatusColor $newStatus)
+    if ($newStatus -eq '正常') {
+        Write-Host '[正常] 问题已解决' -ForegroundColor Green
+    }
+    else {
+        Write-Host '[注意] 问题仍然存在，请查看详细结果。' -ForegroundColor Yellow
+    }
+    Write-PressAnyKeyToReturn
+}
+
 function Show-SupportFullDiagnosisDetails {
     param($Session)
     Write-SupportUiHeader '诊断详情'
@@ -4453,9 +4583,7 @@ function Show-SupportFullDiagnosisResult {
         $choice = Read-MenuSelection 2
         switch ($choice) {
             1 {
-                Write-Host ''
-                Write-Host '修复流程将在后续阶段接入。' -ForegroundColor Yellow
-                Write-PressAnyKeyToReturn
+                Invoke-SupportGuidedProblemRepair
             }
             2 { Show-SupportFullDiagnosisDetails $Session }
             0 { return }
