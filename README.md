@@ -1,4 +1,4 @@
-# Windows IT Support Toolkit V1.0
+# Windows IT Support Toolkit V1.1
 
 面向 IT Support / Desktop Support 的 Windows 日常运维辅助工具。使用 PowerShell + Windows 自带命令 + winget 实现，无第三方依赖。
 目前为自用测试版本
