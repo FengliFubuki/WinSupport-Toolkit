@@ -4,42 +4,49 @@
       "Name": "Google Chrome",
       "PackageId": "Google.Chrome",
       "Description": "Chrome 浏览器",
+      "Category": "浏览器",
       "RequiresAdmin": false
     },
     {
       "Name": "7-Zip",
       "PackageId": "7zip.7zip",
       "Description": "压缩/解压工具",
+      "Category": "工具",
       "RequiresAdmin": false
     },
     {
       "Name": "VLC",
       "PackageId": "VideoLAN.VLC",
       "Description": "媒体播放器",
+      "Category": "工具",
       "RequiresAdmin": false
     },
     {
       "Name": "VS Code",
       "PackageId": "Microsoft.VisualStudioCode",
       "Description": "代码编辑器",
+      "Category": "开发",
       "RequiresAdmin": false
     },
     {
       "Name": "Microsoft 365",
       "PackageId": "Microsoft.Office",
       "Description": "Office 桌面应用（安装后需使用有许可的账号激活）",
+      "Category": "办公",
       "RequiresAdmin": true
     },
     {
       "Name": "微信",
       "PackageId": "Tencent.WeChat",
       "Description": "微信 Windows 版",
+      "Category": "办公",
       "RequiresAdmin": false
     },
     {
       "Name": "企业微信",
       "PackageId": "Tencent.WeCom",
       "Description": "企业微信 Windows 版",
+      "Category": "办公",
       "RequiresAdmin": false
     }
   ]

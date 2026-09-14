@@ -3469,6 +3469,148 @@ function Show-DiskMenu {
 # 软件（winget）
 # ===========================================================================
 
+function Invoke-SupportWingetCapture {
+    param([string[]]$ArgumentList)
+    $output = @()
+    try {
+        $output = @(& winget.exe @ArgumentList 2>&1 | ForEach-Object { [string]$_ })
+        return [pscustomobject]@{ ExitCode = [int]$LASTEXITCODE; Output = @($output) }
+    }
+    catch {
+        return [pscustomobject]@{ ExitCode = -1; Output = @($_.Exception.Message) }
+    }
+}
+
+function Get-SupportWingetRows {
+    param($Capture)
+    $lines = @($Capture.Output | ForEach-Object { [string]$_ })
+    $separatorIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*-{3,}') { $separatorIndex = $i; break }
+    }
+    if ($separatorIndex -lt 1) { return @() }
+    $header = $lines[$separatorIndex - 1]
+    $dashColumns = @([regex]::Matches($lines[$separatorIndex], '-{2,}') | ForEach-Object { $_.Index })
+    $headerTokens = @([regex]::Matches($header, '\S+') | ForEach-Object { [pscustomobject]@{ Text = $_.Value; Index = $_.Index } })
+    $columnNames = @()
+    foreach ($token in $headerTokens) {
+        $columnNames += [pscustomobject]@{ Name = if ($token.Text -match '(?i)^(name|名称)$') { 'Name' } elseif ($token.Text -match '(?i)^(id|package.?id|标识)$') { 'Id' } elseif ($token.Text -match '(?i)^(version|版本|installed)$') { 'Version' } elseif ($token.Text -match '(?i)^(available|可用)$') { 'Available' } elseif ($token.Text -match '(?i)^(source|来源)$') { 'Source' } else { '' }; Index = $token.Index }
+    }
+    $rows = @()
+    for ($i = $separatorIndex + 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if (-not $line.Trim() -or $line -match '(?i)^(No package|没有找到|Name\s+Id|名称\s+ID|次の)' -or $line -match '(?i)^(The following|以下|This package)') { continue }
+        if ($line -match '^\s*-{3,}') { continue }
+        $values = @{}
+        if ($dashColumns.Count -gt 0) {
+            for ($c = 0; $c -lt $dashColumns.Count; $c++) {
+                $start = [int]$dashColumns[$c]
+                if ($start -ge $line.Length) { $value = '' }
+                else {
+                    $end = if ($c + 1 -lt $dashColumns.Count) { [int]$dashColumns[$c + 1] } else { $line.Length }
+                    $length = [Math]::Min($end - $start, $line.Length - $start)
+                    $value = if ($length -gt 0) { $line.Substring($start, $length).Trim() } else { '' }
+                }
+                $values[$c] = $value
+            }
+        }
+        $row = [ordered]@{ Name = ''; Id = ''; Version = ''; Available = ''; Source = '' }
+        for ($c = 0; $c -lt $columnNames.Count; $c++) {
+            $name = $columnNames[$c].Name
+            if ($name -and $values.ContainsKey($c)) { $row[$name] = $values[$c] }
+        }
+        if (-not $row.Name -and $line.Trim()) {
+            $parts = @($line.Trim() -split '\s{2,}')
+            if ($parts.Count -ge 3) { $row.Name = $parts[0]; $row.Id = $parts[1]; $row.Version = $parts[2]; if ($parts.Count -ge 4) { $row.Available = $parts[3] }; if ($parts.Count -ge 5) { $row.Source = $parts[4] } }
+        }
+        if ($row.Name -and ($row.Id -or $row.Version)) { $rows += [pscustomobject]$row }
+    }
+    return @($rows)
+}
+
+function Get-SupportSoftwareDisplayWidth {
+    param([string]$Text)
+    $width = 0
+    foreach ($char in ([string]$Text).ToCharArray()) { $width += if ([int][char]$char -lt 127) { 1 } else { 2 } }
+    return $width
+}
+
+function Format-SupportSoftwareCell {
+    param([string]$Text, [int]$Width)
+    $value = if ($null -eq $Text) { '' } else { [string]$Text }
+    $result = ''
+    foreach ($char in $value.ToCharArray()) {
+        $charWidth = if ([int][char]$char -lt 127) { 1 } else { 2 }
+        if ((Get-SupportSoftwareDisplayWidth ($result + $char)) -gt $Width) { break }
+        $result += $char
+    }
+    if ($result.Length -lt $value.Length -and $Width -ge 4) {
+        while ((Get-SupportSoftwareDisplayWidth ($result + '...')) -gt $Width -and $result.Length -gt 0) { $result = $result.Substring(0, $result.Length - 1) }
+        $result += '...'
+    }
+    $padding = $Width - (Get-SupportSoftwareDisplayWidth $result)
+    if ($padding -gt 0) { $result += (' ' * $padding) }
+    return $result
+}
+
+function Show-SupportSoftwareTable {
+    param(
+        [object[]]$Rows,
+        [ValidateSet('Search','Installed','Upgrade')][string]$Mode = 'Search'
+    )
+    $items = @($Rows)
+    if ($items.Count -eq 0) { Write-NoticeText '没有找到软件结果。'; return $null }
+    $pageSize = 12
+    $page = 0
+    $windowWidth = 120
+    try { if ($Host.UI.RawUI.WindowSize.Width -gt 0) { $windowWidth = [int]$Host.UI.RawUI.WindowSize.Width } } catch {}
+    $nameWidth = if ($windowWidth -lt 105) { 24 } else { 30 }
+    $idWidth = if ($windowWidth -lt 105) { 24 } else { 30 }
+    while ($true) {
+        $start = $page * $pageSize
+        $end = [Math]::Min($start + $pageSize, $items.Count)
+        Write-Host ''
+        switch ($Mode) {
+            'Installed' { $columns = @(@('序号', 4), @('软件名称', $nameWidth), @('当前版本', 18), @('ID', $idWidth)) }
+            'Upgrade' { $columns = @(@('序号', 4), @('软件名称', $nameWidth), @('当前版本', 18), @('可用版本', 18), @('ID', $idWidth)) }
+            default { $columns = @(@('序号', 4), @('软件名称', $nameWidth), @('ID', $idWidth), @('版本', 18), @('来源', 12)) }
+        }
+        Write-Host (($columns | ForEach-Object { Format-SupportSoftwareCell $_[0] $_[1] }) -join ' ') -ForegroundColor Cyan
+        $tableWidth = 0
+        foreach ($column in $columns) { $tableWidth += [int]$column[1] }
+        $tableWidth += ($columns.Count - 1)
+        Write-Host ('-' * [Math]::Max(1, [Math]::Min($windowWidth - 2, $tableWidth))) -ForegroundColor DarkGray
+        for ($i = $start; $i -lt $end; $i++) {
+            $item = $items[$i]
+            $number = Format-SupportSoftwareCell (($i + 1).ToString()) 4
+            if ($Mode -eq 'Installed') { $cells = @($number, $item.Name, $item.Version, $item.Id) }
+            elseif ($Mode -eq 'Upgrade') { $cells = @($number, $item.Name, $item.Version, $item.Available, $item.Id) }
+            else { $cells = @($number, $item.Name, $item.Id, $item.Version, $item.Source) }
+            $line = ''
+            for ($c = 0; $c -lt $cells.Count; $c++) { $line += (Format-SupportSoftwareCell $cells[$c] $columns[$c][1]); if ($c -lt $cells.Count - 1) { $line += ' ' } }
+            Write-Host $line
+        }
+        Write-Host ''
+        Write-Host ('第 ' + ($page + 1) + ' / ' + [Math]::Ceiling($items.Count / $pageSize) + ' 页，共 ' + $items.Count + ' 条') -ForegroundColor Gray
+        Write-Host '[N] 下一页  [P] 上一页  [数字] 查看详情  [0] 返回'
+        $choice = Read-Host '请选择'
+        if ($choice -match '^(?i)n$' -and $end -lt $items.Count) { $page++; continue }
+        if ($choice -match '^(?i)p$' -and $page -gt 0) { $page--; continue }
+        if ($choice -match '^\d+$') {
+            $selectedNumber = [int]$choice
+            if ($selectedNumber -eq 0) { return $null }
+            if ($selectedNumber -ge 1 -and $selectedNumber -le $items.Count) { return $items[$selectedNumber - 1] }
+        }
+        Write-WarnText '输入无效，或当前没有上一页/下一页。'
+    }
+}
+
+function Write-SupportSoftwareState {
+    param([string]$State, [string]$Text)
+    $color = if ($State -eq '失败') { 'Red' } elseif ($State -eq '完成') { 'Green' } elseif ($State -eq '可更新') { 'Yellow' } else { 'Gray' }
+    Write-Host ('[' + $State + '] ' + $Text) -ForegroundColor $color
+}
+
 function Initialize-SupportWinget {
     $script:HasWinget = $false
     try {
@@ -3521,19 +3663,28 @@ function Show-CommonSoftwareMenu {
             Write-PressAnyKeyToReturn
             return
         }
+        $categories = @('浏览器', '办公', '工具', '开发', '其他')
+        $numbered = @()
         $idx = 1
-        foreach ($item in $software) {
-            $desc = ''
-            if ($item.Description) { $desc = ' - ' + $item.Description }
-            Write-Host ('[{0}] {1}（{2}）{3}' -f $idx, $item.Name, $item.PackageId, $desc)
-            $idx++
+        foreach ($category in $categories) {
+            $categoryItems = @($software | Where-Object { if ($_.Category) { $_.Category -eq $category } else { $category -eq '其他' } })
+            if ($categoryItems.Count -eq 0) { continue }
+            Write-Host ''
+            Write-Host $category -ForegroundColor Yellow
+            foreach ($item in $categoryItems) {
+                $numbered += [pscustomobject]@{ Number = $idx; Item = $item }
+                Write-Host ((Format-SupportSoftwareCell ('[' + $idx + ']') 6) + (Format-SupportSoftwareCell $item.Name 30) + (Format-SupportSoftwareCell $item.PackageId 30))
+                if ($item.Description) { Write-Host ('      ' + $item.Description) -ForegroundColor Gray }
+                $idx++
+            }
         }
         Write-Host '[0] 返回'
         Write-Host ''
-        $choice = Read-MenuSelection $software.Count
+        $choice = Read-MenuSelection $numbered.Count
         Write-Host ''
         if ($choice -eq 0) { return }
-        $selected = $software[$choice - 1]
+        $selectedEntry = $numbered | Where-Object { $_.Number -eq $choice } | Select-Object -First 1
+        $selected = if ($selectedEntry) { $selectedEntry.Item } else { $null }
         if (-not $selected -or -not $selected.PackageId) {
             Write-WarnText '配置文件中的软件条目无效。'
             continue
@@ -3549,10 +3700,10 @@ function Show-CommonSoftwareMenu {
             Write-Host ('正在通过 winget 安装 ' + $selected.Name + '，请稍候...')
             $code = Invoke-SupportNativeCommand 'winget.exe' @('install', '--exact', '--id', $selected.PackageId, '--accept-source-agreements', '--accept-package-agreements')
             if ($code -eq 0) {
-                Write-OkText ($selected.Name + ' 安装完成。')
+                Write-SupportSoftwareState '完成' ($selected.Name + ' 安装完成。')
             }
             else {
-                Write-WarnText ('winget 返回退出码 ' + $code + '，请根据上方输出检查失败原因。')
+                Write-SupportSoftwareState '失败' ('winget 返回退出码 ' + $code + '，请根据上方输出检查失败原因。')
             }
         }
         Write-PressAnyKeyToReturn
@@ -3565,12 +3716,15 @@ function Invoke-SoftwareSearch {
     if (-not $keyword) { return }
     Write-Host ''
     Write-Host '正在搜索，请稍候...'
-    $code = Invoke-SupportNativeCommand 'winget.exe' @('search', '--query', $keyword, '--accept-source-agreements')
-    Write-Host ''
-    if ($code -ne 0) {
-        Write-WarnText ('winget 搜索返回退出码 ' + $code + '。')
+    $capture = Invoke-SupportWingetCapture @('search', '--query', $keyword, '--accept-source-agreements')
+    $rows = @(Get-SupportWingetRows $capture)
+    if ($capture.ExitCode -ne 0 -and $rows.Count -eq 0) { Write-SupportSoftwareState '失败' ('winget 搜索失败，退出码 ' + $capture.ExitCode + '。') }
+    elseif ($rows.Count -eq 0) { Write-SupportSoftwareState '完成' '搜索完成，但没有找到匹配软件。' }
+    else {
+        Write-SupportSoftwareState '完成' ('搜索完成，共找到 ' + $rows.Count + ' 个结果。')
+        $selected = Show-SupportSoftwareTable $rows -Mode Search
+        if ($selected) { Write-Host ''; Write-Host ('软件名称：' + $selected.Name); Write-Host ('Package ID：' + $selected.Id); Write-Host ('版本：' + $(if ($selected.Version) { $selected.Version } else { '未知' })) }
     }
-    Write-Host '提示：请记录结果中的完整 ID（例如 Google.Chrome），用于安装/卸载。' -ForegroundColor Gray
 }
 
 function Invoke-SoftwareInstall {
@@ -3587,20 +3741,26 @@ function Invoke-SoftwareInstall {
     Write-Host '正在安装，请稍候（部分软件可能弹出安装向导）...'
     $code = Invoke-SupportNativeCommand 'winget.exe' @('install', '--id', $package, '--accept-source-agreements', '--accept-package-agreements')
     if ($code -eq 0) {
-        Write-OkText '软件安装完成。'
+        Write-SupportSoftwareState '完成' '软件安装完成。'
     }
     else {
-        Write-WarnText ('winget 返回退出码 ' + $code + '。如果 ID 不正确，请先使用「搜索软件」获取完整 ID。')
+        Write-SupportSoftwareState '失败' ('winget 返回退出码 ' + $code + '。如果 ID 不正确，请先使用「搜索软件」获取完整 ID。')
     }
 }
 
 function Invoke-SoftwareUninstall {
     Write-SubTitle '卸载软件'
-    Write-Host '以下为本机 winget 可识别的已安装软件：'
+    Write-SupportSoftwareState '已安装' '以下为本机 winget 可识别的已安装软件：'
     Write-Host ''
-    $null = Invoke-SupportNativeCommand 'winget.exe' @('list', '--accept-source-agreements')
+    $capture = Invoke-SupportWingetCapture @('list', '--accept-source-agreements')
+    $rows = @(Get-SupportWingetRows $capture)
+    $selected = $null
+    if ($rows.Count -gt 0) {
+        $selected = Show-SupportSoftwareTable $rows -Mode Installed
+        if (-not $selected) { return }
+    }
     Write-Host ''
-    $package = Read-Host '请输入要卸载的软件 ID（直接回车返回）'
+    $package = if ($selected) { $selected.Id } else { Read-Host '请输入要卸载的软件 ID（直接回车返回）' }
     if (-not $package) { return }
     if (-not (Get-SupportConfirmation ('确定卸载：' + $package + '？'))) {
         Write-NoticeText '操作已取消。'
@@ -3612,17 +3772,25 @@ function Invoke-SoftwareUninstall {
     Write-Host '正在卸载，请稍候...'
     $code = Invoke-SupportNativeCommand 'winget.exe' @('uninstall', '--id', $package, '--accept-source-agreements')
     if ($code -eq 0) {
-        Write-OkText '软件已卸载。'
+        Write-SupportSoftwareState '完成' '软件已卸载。'
     }
     else {
-        Write-WarnText ('winget 返回退出码 ' + $code + '，部分软件（如 Microsoft 365）可能需要从系统设置中卸载。')
+        Write-SupportSoftwareState '失败' ('winget 返回退出码 ' + $code + '，部分软件（如 Microsoft 365）可能需要从系统设置中卸载。')
     }
 }
 
 function Invoke-SoftwareUpdate {
     Write-SubTitle '更新软件'
     Write-Host '正在检查可更新软件，请稍候...'
-    $null = Invoke-SupportNativeCommand 'winget.exe' @('upgrade', '--accept-source-agreements')
+    $capture = Invoke-SupportWingetCapture @('upgrade', '--accept-source-agreements')
+    $rows = @(Get-SupportWingetRows $capture)
+    if ($rows.Count -gt 0) {
+        Write-SupportSoftwareState '可更新' ('发现 ' + $rows.Count + ' 个可更新软件：')
+        $updateSelection = Show-SupportSoftwareTable $rows -Mode Upgrade
+        if ($null -eq $updateSelection) { return }
+    }
+    elseif ($capture.ExitCode -eq 0) { Write-SupportSoftwareState '完成' '当前没有可更新的软件。' }
+    else { Write-SupportSoftwareState '失败' ('检查可更新软件失败，退出码 ' + $capture.ExitCode + '。') }
     Write-Host ''
     if (Get-SupportConfirmation '是否更新全部可更新的软件？更新过程可能需要较长时间。') {
         if (-not (Confirm-SupportAdminOperation '更新部分软件可能需要管理员权限。')) {
@@ -3631,10 +3799,10 @@ function Invoke-SoftwareUpdate {
         Write-Host '正在更新全部软件，请稍候（可能需要较长时间）...'
         $code = Invoke-SupportNativeCommand 'winget.exe' @('upgrade', '--all', '--accept-source-agreements', '--accept-package-agreements')
         if ($code -eq 0) {
-            Write-OkText '软件更新完成。'
+            Write-SupportSoftwareState '完成' '软件更新完成。'
         }
         else {
-            Write-WarnText ('winget 返回退出码 ' + $code + '。部分软件可能需要重启电脑或由用户完成交互。')
+            Write-SupportSoftwareState '失败' ('winget 返回退出码 ' + $code + '。部分软件可能需要重启电脑或由用户完成交互。')
         }
     }
     else {
@@ -3645,14 +3813,22 @@ function Invoke-SoftwareUpdate {
 function Invoke-SoftwareInstalledList {
     Write-SubTitle '已安装软件'
     Write-Host '正在读取列表（winget 首次使用可能需要下载源信息，请耐心等待）...'
-    $code = Invoke-SupportNativeCommand 'winget.exe' @('list', '--accept-source-agreements')
-    if ($code -ne 0) {
-        Write-WarnText ('winget list 返回退出码 ' + $code + '。')
+    $capture = Invoke-SupportWingetCapture @('list', '--accept-source-agreements')
+    $rows = @(Get-SupportWingetRows $capture)
+    if ($rows.Count -gt 0) {
+        Write-SupportSoftwareState '已安装' ('共识别 ' + $rows.Count + ' 个软件：')
+        $null = Show-SupportSoftwareTable $rows -Mode Installed
     }
+    elseif ($capture.ExitCode -ne 0) { Write-SupportSoftwareState '失败' ('winget list 返回退出码 ' + $capture.ExitCode + '。') }
+    else { Write-SupportSoftwareState '完成' '没有检测到已安装软件。' }
     $filter = Read-Host '输入关键字可再次筛选，直接回车结束'
     if ($filter) {
         Write-Host ''
-        $null = Invoke-SupportNativeCommand 'winget.exe' @('list', '--name', $filter, '--accept-source-agreements')
+        $filteredCapture = Invoke-SupportWingetCapture @('list', '--name', $filter, '--accept-source-agreements')
+        $filteredRows = @(Get-SupportWingetRows $filteredCapture)
+        if ($filteredRows.Count -gt 0) { $null = Show-SupportSoftwareTable $filteredRows -Mode Installed }
+        elseif ($filteredCapture.ExitCode -eq 0) { Write-SupportSoftwareState '完成' '没有找到匹配的已安装软件。' }
+        else { Write-SupportSoftwareState '失败' ('筛选失败，退出码 ' + $filteredCapture.ExitCode + '。') }
     }
 }
 

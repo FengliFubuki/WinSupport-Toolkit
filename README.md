@@ -106,11 +106,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticR
   "Name": "软件显示名",
   "PackageId": "winget 软件 ID",
   "Description": "说明",
+  "Category": "浏览器",
   "RequiresAdmin": false
 }
 ```
 
-查询 winget ID 的方法：进入工具「软件 -> 搜索软件」，或在命令行执行 `winget search 软件名`。
+查询 winget ID 的方法：进入工具「软件 -> 搜索软件」，或在命令行执行 `winget search 软件名`。`Category` 为可选字段；未填写时会归入“其他”。
 
 ## 设计约束
 

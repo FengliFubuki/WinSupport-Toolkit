@@ -317,6 +317,17 @@ Assert-Contains ($printerRepairScripts[0].RelativePath) 'repair-printer-componen
 Assert-Contains ($printerRepairScripts[1].RelativePath) 'repair-win32spl-rpc.bat' '打印机修复：win32spl 修复脚本路径'
 Assert-Equal 'DDR4' (Convert-SupportMemoryTypeText 26) '电脑配置：识别 DDR4'
 Assert-Equal 'DDR5' (Convert-SupportMemoryTypeText 34) '电脑配置：识别 DDR5'
+$wingetFixture = [pscustomobject]@{ ExitCode = 0; Output = @(
+    'Name                         Id                           Version      Source'
+    '---------------------------  ---------------------------  -----------  --------'
+    'Google Chrome               Google.Chrome                140.0        winget'
+    'Mozilla Firefox             Mozilla.Firefox              142.0        winget'
+) }
+$wingetRows = @(Get-SupportWingetRows $wingetFixture)
+Assert-Equal 2 $wingetRows.Count '软件 UI：解析 winget 表格为对象'
+Assert-Equal 'Google.Chrome' $wingetRows[0].Id '软件 UI：解析 Package ID'
+Assert-Equal 'Google Chrome' $wingetRows[0].Name '软件 UI：保留带空格的软件名'
+Assert-Contains (Format-SupportSoftwareCell 'Google Chrome' 8) '...' '软件 UI：长文本截断'
 
 Write-Host '正在验证磁盘和系统服务规则...' -ForegroundColor Cyan
 
