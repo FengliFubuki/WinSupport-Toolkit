@@ -3490,7 +3490,6 @@ function Get-SupportWingetRows {
     }
     if ($separatorIndex -lt 1) { return @() }
     $header = $lines[$separatorIndex - 1]
-    $dashColumns = @([regex]::Matches($lines[$separatorIndex], '-{2,}') | ForEach-Object { $_.Index })
     $headerTokens = @([regex]::Matches($header, '\S+') | ForEach-Object { [pscustomobject]@{ Text = $_.Value; Index = $_.Index } })
     $columnNames = @()
     foreach ($token in $headerTokens) {
@@ -3502,12 +3501,12 @@ function Get-SupportWingetRows {
         if (-not $line.Trim() -or $line -match '(?i)^(No package|没有找到|Name\s+Id|名称\s+ID|次の)' -or $line -match '(?i)^(The following|以下|This package)') { continue }
         if ($line -match '^\s*-{3,}') { continue }
         $values = @{}
-        if ($dashColumns.Count -gt 0) {
-            for ($c = 0; $c -lt $dashColumns.Count; $c++) {
-                $start = [int]$dashColumns[$c]
+        if ($headerTokens.Count -gt 0) {
+            for ($c = 0; $c -lt $headerTokens.Count; $c++) {
+                $start = [int]$headerTokens[$c].Index
                 if ($start -ge $line.Length) { $value = '' }
                 else {
-                    $end = if ($c + 1 -lt $dashColumns.Count) { [int]$dashColumns[$c + 1] } else { $line.Length }
+                    $end = if ($c + 1 -lt $headerTokens.Count) { [int]$headerTokens[$c + 1].Index } else { $line.Length }
                     $length = [Math]::Min($end - $start, $line.Length - $start)
                     $value = if ($length -gt 0) { $line.Substring($start, $length).Trim() } else { '' }
                 }

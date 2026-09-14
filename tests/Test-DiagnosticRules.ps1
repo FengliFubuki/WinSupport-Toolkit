@@ -319,7 +319,7 @@ Assert-Equal 'DDR4' (Convert-SupportMemoryTypeText 26) '电脑配置：识别 DD
 Assert-Equal 'DDR5' (Convert-SupportMemoryTypeText 34) '电脑配置：识别 DDR5'
 $wingetFixture = [pscustomobject]@{ ExitCode = 0; Output = @(
     'Name                         Id                           Version      Source'
-    '---------------------------  ---------------------------  -----------  --------'
+    '--------------------------------------------------------------------------------'
     'Google Chrome               Google.Chrome                140.0        winget'
     'Mozilla Firefox             Mozilla.Firefox              142.0        winget'
 ) }
