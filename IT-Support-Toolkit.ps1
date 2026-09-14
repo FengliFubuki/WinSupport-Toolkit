@@ -255,12 +255,17 @@ function Invoke-SupportNativeCommand {
         [string[]]$ArgumentList
     )
     try {
+        $output = @()
         if ($ArgumentList.Count -gt 0) {
-            & $FilePath @ArgumentList
+            $output = @(& $FilePath @ArgumentList 2>&1)
         }
         else {
-            & $FilePath
+            $output = @(& $FilePath 2>&1)
         }
+        foreach ($line in $output) {
+            Write-Host ([string]$line)
+        }
+        # 原生命令的标准输出不能混入返回值，否则调用方拿到的不是纯退出码。
         return $LASTEXITCODE
     }
     catch {
