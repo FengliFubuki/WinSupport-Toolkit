@@ -836,6 +836,17 @@ function Get-SupportNetworkAdapterState {
                     $dhcpEnabled = [bool]$cfg.DHCPEnabled
                 }
 
+                # 某些 Windows 10/11 环境中 WMI 配置查询可能暂时无法按接口索引匹配；
+                # 仅在 WMI 没有返回关键网络数据时，使用 NetTCPIP 模块读取同一接口。
+                if ($ipv4List.Count -eq 0 -or $gwList.Count -eq 0 -or $dnsList.Count -eq 0) {
+                    $modernConfig = Get-SupportModernAdapterNetworkConfig -InterfaceIndex ([int]$na.InterfaceIndex)
+                    if ($ipv4List.Count -eq 0) { $ipv4List = @($modernConfig.IPAddresses) }
+                    if ($maskList.Count -eq 0) { $maskList = @($modernConfig.SubnetMasks) }
+                    if ($gwList.Count -eq 0) { $gwList = @($modernConfig.Gateways) }
+                    if ($dnsList.Count -eq 0) { $dnsList = @($modernConfig.DnsServers) }
+                    if (-not $dhcpEnabled) { $dhcpEnabled = [bool]$modernConfig.DhcpEnabled }
+                }
+
                 $enabled = ($na.Status -ne 'Disabled')
                 $connected = ($na.Status -eq 'Up')
                 $statusText = [string]$na.Status
@@ -1016,6 +1027,56 @@ function Get-SupportWifiInfo {
     }
     catch {}
     return $wifi
+}
+
+function Get-SupportModernAdapterNetworkConfig {
+    param([int]$InterfaceIndex)
+    $result = [pscustomobject]@{
+        IPAddresses = @()
+        SubnetMasks = @()
+        Gateways    = @()
+        DnsServers  = @()
+        DhcpEnabled = $false
+    }
+    try {
+        $ipItems = @(Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+        foreach ($ipItem in $ipItems) {
+            if ($ipItem.IPAddress -and ([string]$ipItem.IPAddress -match '^\d{1,3}(\.\d{1,3}){3}$')) {
+                $result.IPAddresses += [string]$ipItem.IPAddress
+                if ($ipItem.PrefixLength -ne $null) {
+                    $prefix = [int]$ipItem.PrefixLength
+                    $mask = [uint32]0
+                    if ($prefix -gt 0) { $mask = [uint32]([uint64]0xffffffff -shl (32 - $prefix)) }
+                    $bytes = [BitConverter]::GetBytes($mask)
+                    [Array]::Reverse($bytes)
+                    $result.SubnetMasks += (($bytes | ForEach-Object { [string]$_ }) -join '.')
+                }
+            }
+        }
+    }
+    catch {}
+    try {
+        $ipConfig = Get-NetIPConfiguration -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($ipConfig) {
+            foreach ($gateway in @($ipConfig.IPv4DefaultGateway)) {
+                if ($gateway.NextHop) { $result.Gateways += [string]$gateway.NextHop }
+            }
+            if ($ipConfig.DnsServer -and $ipConfig.DnsServer.ServerAddresses) {
+                $result.DnsServers += @($ipConfig.DnsServer.ServerAddresses | ForEach-Object { [string]$_ })
+            }
+        }
+    }
+    catch {}
+    try {
+        $ipInterface = Get-NetIPInterface -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($ipInterface -and [string]$ipInterface.Dhcp -eq 'Enabled') { $result.DhcpEnabled = $true }
+    }
+    catch {}
+    $result.IPAddresses = @($result.IPAddresses | Select-Object -Unique)
+    $result.SubnetMasks = @($result.SubnetMasks | Select-Object -Unique)
+    $result.Gateways = @($result.Gateways | Select-Object -Unique)
+    $result.DnsServers = @($result.DnsServers | Select-Object -Unique)
+    return $result
 }
 
 function Get-SupportWinHttpProxyInfo {
