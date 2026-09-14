@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 ============================================================================
-  Windows IT Support Toolkit V1.1
+  Windows IT Support Toolkit V1.2
 --------------------------------------------------------------------------
   用途：面向 IT Support / Desktop Support 的日常运维辅助工具
   运行要求：Windows 10 / Windows 11（需 Windows PowerShell 5.1+）
@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = 'Continue'
 
 $script:ToolName    = 'Windows IT Support Toolkit'
-$script:ToolVersion = '1.1.0'
+$script:ToolVersion = '1.2.0'
 $script:ScriptRoot  = $PSScriptRoot
 if (-not $script:ScriptRoot) {
     try {
@@ -78,7 +78,7 @@ function Write-Banner {
     Write-Host ''
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host '       Windows IT Support Toolkit' -ForegroundColor Cyan
-    Write-Host '       V1.1 - IT Support 诊断与运维工具' -ForegroundColor Cyan
+    Write-Host '       V1.2 - IT Support 诊断与运维工具' -ForegroundColor Cyan
     Write-Host '========================================' -ForegroundColor Cyan
     Write-Host ''
 }
@@ -1061,7 +1061,8 @@ function Test-SupportVpnOrTunnelAdapter {
     $description = [string]$Adapter.Description
     if ($mediaType -match '(?i)tunnel|vpn') { return $true }
     if ($physicalMediaType -match '(?i)tunnel') { return $true }
-    if ($description -match '(?i)\b(vpn|tun|tap)\b') { return $true }
+    if ($description -match '(?i)\b(vpn|tun|tap|wireguard|wintun)\b') { return $true }
+    if ([bool]$Adapter.IsVirtual) { return $true }
     return $false
 }
 
@@ -1072,6 +1073,10 @@ function Get-SupportProxyInfo {
         Server             = ''
         Bypass             = ''
         AutoConfigUrl      = ''
+        AutoDetect         = $false
+        ProxyEnable        = $false
+        Environment        = @()
+        EnvironmentEnabled = $false
         Summary            = '未启用代理'
         WinHttpEnabled     = $false
         WinHttpServer      = ''
@@ -1085,12 +1090,14 @@ function Get-SupportProxyInfo {
         $key = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
         if ($key) {
             $proxy.AutoConfigUrl = [string]$key.AutoConfigURL
+            $proxy.AutoDetect = [bool]$key.AutoDetect
             if ($key.ProxyEnable -and ([int]$key.ProxyEnable -eq 1)) {
                 $proxy.Enabled = $true
+                $proxy.ProxyEnable = $true
                 $proxy.Server = [string]$key.ProxyServer
                 $proxy.Bypass = [string]$key.ProxyOverride
             }
-            if ($proxy.AutoConfigUrl) {
+            if ($proxy.AutoConfigUrl -or $proxy.AutoDetect) {
                 $proxy.Enabled = $true
             }
         }
@@ -1101,6 +1108,17 @@ function Get-SupportProxyInfo {
     $proxy.WinHttpEnabled = $winHttp.Enabled
     $proxy.WinHttpServer = $winHttp.Server
     $proxy.WinHttpSummary = $winHttp.Summary
+
+    foreach ($envName in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
+        try {
+            $envValue = [string](Get-Item -Path ('Env:' + $envName) -ErrorAction SilentlyContinue).Value
+            if ($envValue) {
+                $proxy.Environment += [pscustomobject]@{ Name = $envName; Value = $envValue }
+                if ($envName -ne 'NO_PROXY') { $proxy.EnvironmentEnabled = $true }
+            }
+        }
+        catch {}
+    }
 
     if (-not $Adapters) {
         try { $Adapters = @(Get-SupportNetworkAdapterState) } catch { $Adapters = @() }
@@ -1117,7 +1135,7 @@ function Get-SupportProxyInfo {
         $proxy.VpnAdapterNames = @($vpnNames)
     }
 
-    $proxy.AnyProxy = ($proxy.Enabled -or $proxy.WinHttpEnabled -or $proxy.VpnOrTunnelDetected)
+    $proxy.AnyProxy = ($proxy.Enabled -or $proxy.WinHttpEnabled -or $proxy.EnvironmentEnabled -or $proxy.VpnOrTunnelDetected)
     $summaryParts = @()
     if ($proxy.Enabled) {
         if ($proxy.Server) { $summaryParts += ('系统代理：' + $proxy.Server) }
@@ -1128,6 +1146,9 @@ function Get-SupportProxyInfo {
         if ($proxy.WinHttpServer) { $summaryParts += ('WinHTTP：' + $proxy.WinHttpServer) }
         else { $summaryParts += 'WinHTTP：已配置代理' }
     }
+    if ($proxy.EnvironmentEnabled) {
+        $summaryParts += ('环境变量：' + ((@($proxy.Environment | Where-Object { $_.Name -ne 'NO_PROXY' }) | ForEach-Object { $_.Name + '=' + $_.Value }) -join ', '))
+    }
     if ($proxy.VpnOrTunnelDetected) {
         $summaryParts += ('VPN/TUN：' + ($vpnNames -join ', '))
     }
@@ -1135,6 +1156,246 @@ function Get-SupportProxyInfo {
         $proxy.Summary = ($summaryParts -join '；')
     }
     return $proxy
+}
+
+# ---- V1.2 网络环境检测（独立于基础 IPv4/网关/DNS 诊断） ----
+
+function Invoke-SupportJsonWebRequest {
+    param(
+        [string]$Uri,
+        [int]$TimeoutMs = 6000,
+        $ProxyInfo
+    )
+    $request = $null
+    $response = $null
+    $reader = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Uri)
+        $request.Method = 'GET'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        $request.AllowAutoRedirect = $true
+        $request.UserAgent = 'WinSupport-Toolkit/1.2'
+        $request.UseDefaultCredentials = $true
+        try {
+            $request.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
+            if ($ProxyInfo -and -not $ProxyInfo.Enabled -and $ProxyInfo.WinHttpServer -and $ProxyInfo.WinHttpServer -notmatch '[=;]') {
+                $proxyAddress = [string]$ProxyInfo.WinHttpServer
+                if ($proxyAddress -notmatch '^[a-z]+://') { $proxyAddress = 'http://' + $proxyAddress }
+                $request.Proxy = New-Object System.Net.WebProxy($proxyAddress, $true)
+            }
+        } catch {}
+        $response = $request.GetResponse()
+        $reader = New-Object -TypeName System.IO.StreamReader -ArgumentList @($response.GetResponseStream())
+        $raw = $reader.ReadToEnd()
+        return [pscustomobject]@{ Success = $true; StatusCode = [int]$response.StatusCode; Data = ($raw | ConvertFrom-Json); Raw = $raw; Error = '' }
+    }
+    catch {
+        return [pscustomobject]@{ Success = $false; StatusCode = 0; Data = $null; Raw = ''; Error = $_.Exception.Message }
+    }
+    finally {
+        if ($reader) { try { $reader.Close() } catch {} }
+        if ($response) { try { $response.Close() } catch {} }
+    }
+}
+
+function Get-SupportPublicNetworkInfo {
+    param($ProxyInfo)
+    $services = @('https://ipwho.is/', 'https://ipapi.co/json/')
+    foreach ($uri in $services) {
+        $result = Invoke-SupportJsonWebRequest -Uri $uri -TimeoutMs 6000 -ProxyInfo $ProxyInfo
+        if (-not $result.Success -or -not $result.Data) { continue }
+        $data = $result.Data
+        $ip = [string]$data.ip
+        if (-not $ip) { continue }
+        $country = [string]$data.country
+        $region = [string]$data.region
+        $city = [string]$data.city
+        $org = [string]$data.connection.org
+        $asn = [string]$data.connection.asn
+        if (-not $org) { $org = [string]$data.org }
+        if (-not $asn) { $asn = [string]$data.asn }
+        return [pscustomobject]@{
+            Success = $true; PublicIP = $ip; Country = $country; Region = $region; City = $city
+            Organization = $org; ISP = $org; ASN = $asn; Service = $uri; Error = ''
+        }
+    }
+    return [pscustomobject]@{
+        Success = $false; PublicIP = ''; Country = ''; Region = ''; City = ''
+        Organization = ''; ISP = ''; ASN = ''; Service = ''; Error = '公网出口信息服务均不可访问'
+    }
+}
+
+function Test-SupportEnvironmentTarget {
+    param(
+        [string]$Name,
+        [string]$HostName,
+        [string]$Uri,
+        [int]$TimeoutMs = 6000,
+        [bool]$UseSystemProxy = $true,
+        $ProxyInfo
+    )
+    $started = [DateTime]::UtcNow
+    $dns = @()
+    $dnsError = ''
+    try { $dns = @([System.Net.Dns]::GetHostAddresses($HostName)) } catch { $dnsError = $_.Exception.Message }
+    $dnsOk = ($dns.Count -gt 0)
+    $statusCode = 0
+    $httpsOk = $false
+    $httpsError = ''
+    $request = $null
+    $response = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Uri)
+        $request.Method = 'GET'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        $request.AllowAutoRedirect = $true
+        $request.UserAgent = 'WinSupport-Toolkit/1.2'
+        $request.UseDefaultCredentials = $true
+        if ($UseSystemProxy) {
+            try {
+                $request.Proxy = [System.Net.WebRequest]::GetSystemWebProxy()
+                if ($ProxyInfo -and -not $ProxyInfo.Enabled -and $ProxyInfo.WinHttpServer -and $ProxyInfo.WinHttpServer -notmatch '[=;]') {
+                    $proxyAddress = [string]$ProxyInfo.WinHttpServer
+                    if ($proxyAddress -notmatch '^[a-z]+://') { $proxyAddress = 'http://' + $proxyAddress }
+                    $request.Proxy = New-Object System.Net.WebProxy($proxyAddress, $true)
+                }
+            } catch {}
+        }
+        $response = $request.GetResponse()
+        $statusCode = [int]$response.StatusCode
+        $httpsOk = ($statusCode -ge 200 -and $statusCode -lt 400)
+    }
+    catch [System.Net.WebException] {
+        $response = $_.Exception.Response
+        if ($response) {
+            try { $statusCode = [int]$response.StatusCode } catch {}
+            $httpsOk = ($statusCode -ge 200 -and $statusCode -lt 400)
+        }
+        $httpsError = $_.Exception.Message
+    }
+    catch { $httpsError = $_.Exception.Message }
+    finally { if ($response) { try { $response.Close() } catch {} } }
+    $elapsed = ([DateTime]::UtcNow - $started).TotalMilliseconds
+    return [pscustomobject]@{
+        Name = $Name; HostName = $HostName; Uri = $Uri; DnsSuccess = $dnsOk; DnsAddresses = @($dns | Select-Object -First 3 | ForEach-Object { [string]$_ })
+        DnsError = $dnsError; HttpsSuccess = $httpsOk; StatusCode = $statusCode; LatencyMs = [int]$elapsed; Error = $httpsError
+        # 代理可能替客户端完成 DNS，因此可达性以 HTTPS 为准，DNS 仅作为技术详情。
+        Success = $httpsOk
+    }
+}
+
+function Get-SupportNetworkEnvironmentStatus {
+    param([object[]]$Results)
+    $items = @($Results)
+    if ($items.Count -eq 0) { return '异常' }
+    $successes = @($items | Where-Object { $_.Success }).Count
+    if (($successes * 2) -gt $items.Count) { return '正常' }
+    if ($successes -gt 0) { return '部分可用' }
+    return '异常'
+}
+
+function Get-SupportNetworkEnvironmentConclusion {
+    param($Environment)
+    $proxy = $Environment.Proxy
+    $local = if ($Environment.LocalNetworkHealthy) { '本地网络正常' } else { '本地网络存在基础连接问题' }
+    $proxyText = if ($proxy.AnyProxy) { '当前通过代理或 VPN/TUN 访问互联网' } else { '当前未检测到代理' }
+    $location = if ($Environment.Public.Success) {
+        $place = @($Environment.Public.Country, $Environment.Public.Region, $Environment.Public.City) | Where-Object { $_ }
+        '公网出口位于' + ($place -join ' / ')
+    } else { '公网出口地区暂时无法获取' }
+    return ($local + '，' + $proxyText + '。' + $location + '。中国大陆网络' + $Environment.MainlandStatus + '，海外网络' + $Environment.OverseasStatus + '，Google' + $Environment.GoogleStatus + '。')
+}
+
+function Get-SupportNetworkEnvironmentInfo {
+    $adapters = @()
+    try { $adapters = @(Get-SupportNetworkAdapterState) } catch {}
+    $proxy = Get-SupportProxyInfo $adapters
+    $public = Get-SupportPublicNetworkInfo -ProxyInfo $proxy
+    $mainlandTargets = @(
+        @{ Name = '百度'; HostName = 'www.baidu.com'; Uri = 'https://www.baidu.com/' },
+        @{ Name = '腾讯'; HostName = 'www.qq.com'; Uri = 'https://www.qq.com/' },
+        @{ Name = '阿里云'; HostName = 'www.aliyun.com'; Uri = 'https://www.aliyun.com/' }
+    )
+    $overseasTargets = @(
+        @{ Name = 'Google'; HostName = 'www.google.com'; Uri = 'https://www.google.com/generate_204' },
+        @{ Name = 'Cloudflare'; HostName = 'www.cloudflare.com'; Uri = 'https://www.cloudflare.com/' },
+        @{ Name = 'GitHub'; HostName = 'github.com'; Uri = 'https://github.com/' }
+    )
+    $mainland = @($mainlandTargets | ForEach-Object { Test-SupportEnvironmentTarget -Name $_.Name -HostName $_.HostName -Uri $_.Uri -ProxyInfo $proxy })
+    $overseas = @($overseasTargets | ForEach-Object { Test-SupportEnvironmentTarget -Name $_.Name -HostName $_.HostName -Uri $_.Uri -ProxyInfo $proxy })
+    $google = $overseas | Where-Object { $_.Name -eq 'Google' } | Select-Object -First 1
+    $localHealthy = $false
+    try {
+        $localHealthy = (@($adapters | Where-Object { $_.Enabled -and $_.Connected -and $_.IPAddresses.Count -gt 0 -and $_.Gateways.Count -gt 0 }).Count -gt 0)
+    } catch {}
+    $environment = [pscustomobject]@{
+        GeneratedAt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'; Proxy = $proxy; Public = $public
+        Mainland = @($mainland); Overseas = @($overseas); Google = $google
+        MainlandStatus = Get-SupportNetworkEnvironmentStatus $mainland
+        OverseasStatus = Get-SupportNetworkEnvironmentStatus $overseas
+        GoogleStatus = if ($google -and $google.Success) { '正常' } else { '无法访问' }
+        LocalNetworkHealthy = $localHealthy
+    }
+    $environment.Conclusion = Get-SupportNetworkEnvironmentConclusion $environment
+    return $environment
+}
+
+function Write-SupportNetworkEnvironmentStatus {
+    param([string]$Label, [string]$Status)
+    $color = if ($Status -eq '正常') { 'Green' } elseif ($Status -eq '部分可用') { 'Yellow' } else { 'Red' }
+    Write-Host ('[' + $Status + '] ' + $Label) -ForegroundColor $color
+}
+
+function Show-SupportNetworkEnvironment {
+    while ($true) {
+        Write-SupportUiHeader '网络环境'
+        Write-Host '正在检测网络环境，请稍候...' -ForegroundColor Gray
+        $environment = Get-SupportNetworkEnvironmentInfo
+        Write-Host ''
+        Write-SubTitle '代理'
+        if ($environment.Proxy.AnyProxy) {
+            Write-WarnText '已检测到代理或 VPN/TUN'
+        } else { Write-OkText '未检测到代理' }
+        $systemProxyText = if ($environment.Proxy.Server) { $environment.Proxy.Server } elseif ($environment.Proxy.AutoConfigUrl) { 'PAC：' + $environment.Proxy.AutoConfigUrl } elseif ($environment.Proxy.AutoDetect) { '自动检测（WPAD）' } elseif ($environment.Proxy.Enabled) { '已启用（未设置服务器）' } else { '未启用' }
+        Write-Host ('系统代理：' + $systemProxyText)
+        Write-Host ('PAC：' + $(if ($environment.Proxy.AutoConfigUrl) { $environment.Proxy.AutoConfigUrl } elseif ($environment.Proxy.AutoDetect) { '自动检测（WPAD）' } else { '未使用' }))
+        Write-Host ('WinHTTP：' + $(if ($environment.Proxy.WinHttpEnabled) { $environment.Proxy.WinHttpServer } else { 'Direct' }))
+        Write-Host ('VPN/TUN：' + $(if ($environment.Proxy.VpnOrTunnelDetected) { '检测到（' + ($environment.Proxy.VpnAdapterNames -join ', ') + '）' } else { '未检测到' }))
+        if (@($environment.Proxy.Environment).Count -gt 0) { Write-Host ('环境变量：' + ((@($environment.Proxy.Environment) | ForEach-Object { $_.Name + '=' + $_.Value }) -join ', ')) }
+        Write-SubTitle '公网出口'
+        if ($environment.Public.Success) {
+            Write-Host ('IP：' + $environment.Public.PublicIP)
+            Write-Host ('公网出口地区：' + ((@($environment.Public.Country, $environment.Public.Region, $environment.Public.City) | Where-Object { $_ }) -join ' / '))
+            Write-Host ('运营商：' + $environment.Public.Organization)
+            if ($environment.Public.ASN) { Write-Host ('ASN：' + $environment.Public.ASN) }
+            Write-Host '提示：公网出口地区 ≠ 电脑物理位置' -ForegroundColor Gray
+        } else { Write-WarnText '公网出口信息暂时无法获取，不影响网络故障判断。' }
+        Write-SubTitle '网络可达性'
+        Write-SupportNetworkEnvironmentStatus '中国大陆网络' $environment.MainlandStatus
+        Write-SupportNetworkEnvironmentStatus '海外网络' $environment.OverseasStatus
+        Write-SupportNetworkEnvironmentStatus 'Google' $environment.GoogleStatus
+        Write-SubTitle '结论'
+        Write-Host $environment.Conclusion -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '[1] 重新检测'
+        Write-Host '[2] 技术详情'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 2
+        if ($choice -eq 0) { return }
+        if ($choice -eq 2) {
+            Write-SupportUiHeader '网络环境技术详情'
+            Write-Host ('代理对象：' + ($environment.Proxy | ConvertTo-Json -Depth 5)) -ForegroundColor Gray
+            Write-Host ''
+            Write-Host '中国大陆测试：' -ForegroundColor Cyan
+            @($environment.Mainland) + @($environment.Overseas) | Format-List | Out-String -Width 240 | Write-Host
+            Write-Host '公网 API：' -ForegroundColor Cyan
+            $environment.Public | Format-List | Out-String -Width 200 | Write-Host
+            Write-PressAnyKeyToReturn
+        }
+    }
 }
 
 function Show-SupportNetworkInfo {
@@ -2255,11 +2516,12 @@ function Show-NetworkMenu {
     while ($true) {
         Write-SectionTitle '网络'
         Write-Host '[1] 查看网络信息'
-        Write-Host '[2] 网络诊断'
-        Write-Host '[3] 网络修复'
+        Write-Host '[2] 网络环境'
+        Write-Host '[3] 网络诊断'
+        Write-Host '[4] 网络修复'
         Write-Host '[0] 返回'
         Write-Host ''
-        $choice = Read-MenuSelection 3
+        $choice = Read-MenuSelection 4
         Write-Host ''
         switch ($choice) {
             1 {
@@ -2267,10 +2529,14 @@ function Show-NetworkMenu {
                 Write-PressAnyKeyToReturn
             }
             2 {
+                Show-SupportNetworkEnvironment
+                Write-PressAnyKeyToReturn
+            }
+            3 {
                 Show-SupportNetworkDiagnosis
                 Write-PressAnyKeyToReturn
             }
-            3 { Show-NetworkRepairMenu }
+            4 { Show-NetworkRepairMenu }
             0 { return }
         }
     }
@@ -2366,6 +2632,7 @@ function Get-SupportPrinterJobs {
 function Show-SupportPrinterList {
     Write-SectionTitle '已安装打印机'
     $printers = @(Get-SupportPrinters)
+    $networkEnvironment = Get-SupportNetworkEnvironmentInfo
     if ($printers.Count -eq 0) {
         Write-NoticeText '未检测到打印机。'
         return
@@ -3792,6 +4059,7 @@ function New-SupportReportSnapshot {
         Disk           = $disks
         Battery        = $battery
         Printers       = $printers
+        NetworkEnvironment = $networkEnvironment
     }
 }
 
@@ -3842,6 +4110,23 @@ function Export-SupportReportTxt {
         [void]$sb.AppendLine('[' + (Get-SupportLegacyStatusText $r.Status) + '] ' + $r.Check + ' - ' + $r.Message)
     }
     [void]$sb.AppendLine('')
+
+    if ($Snapshot.NetworkEnvironment) {
+        $ne = $Snapshot.NetworkEnvironment
+        [void]$sb.AppendLine('===== 网络环境 =====')
+        [void]$sb.AppendLine('代理：' + $(if ($ne.Proxy.AnyProxy) { '已检测到' } else { '未检测到' }))
+        [void]$sb.AppendLine('系统代理：' + $(if ($ne.Proxy.Enabled) { $ne.Proxy.Server } else { '未启用' }))
+        [void]$sb.AppendLine('WinHTTP：' + $(if ($ne.Proxy.WinHttpEnabled) { $ne.Proxy.WinHttpServer } else { 'Direct' }))
+        [void]$sb.AppendLine('VPN/TUN：' + $(if ($ne.Proxy.VpnOrTunnelDetected) { ($ne.Proxy.VpnAdapterNames -join ', ') } else { '未检测到' }))
+        [void]$sb.AppendLine('公网 IP：' + $(if ($ne.Public.Success) { $ne.Public.PublicIP } else { '无法获取' }))
+        [void]$sb.AppendLine('公网出口地区：' + $(if ($ne.Public.Success) { (@($ne.Public.Country, $ne.Public.Region, $ne.Public.City) | Where-Object { $_ }) -join ' / ' } else { '无法获取' }))
+        [void]$sb.AppendLine('运营商：' + $(if ($ne.Public.Success) { $ne.Public.Organization } else { '无法获取' }))
+        [void]$sb.AppendLine('中国大陆网络：' + $ne.MainlandStatus)
+        [void]$sb.AppendLine('海外网络：' + $ne.OverseasStatus)
+        [void]$sb.AppendLine('Google：' + $ne.GoogleStatus)
+        [void]$sb.AppendLine('结论：' + $ne.Conclusion)
+        [void]$sb.AppendLine('')
+    }
 
     [void]$sb.AppendLine('===== 磁盘信息 =====')
     foreach ($d in $Snapshot.Disk) {
@@ -3984,7 +4269,7 @@ function Show-ReportMenu {
 }
 
 # ===========================================================================
-# V1.1 UI 页面
+# V1.2 UI 页面
 # ===========================================================================
 
 function Write-SupportUiHeader {

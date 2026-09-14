@@ -290,6 +290,28 @@ $gatewayIcMpBlockedResults = @(ConvertTo-SupportNetworkDiagnosticResults $gatewa
 $gatewayIcMpBlockedSummary = Get-SupportNetworkDiagnosticSummary $gatewayIcMpBlockedResults
 Assert-Contains $gatewayIcMpBlockedSummary.PrimaryDiagnosis '网关未响应 Ping' '网关屏蔽 ICMP：公网可达时单独说明'
 
+$envPass = @(
+    [pscustomobject]@{ Name = '百度'; Success = $true }
+    [pscustomobject]@{ Name = '腾讯'; Success = $true }
+    [pscustomobject]@{ Name = '阿里云'; Success = $false }
+)
+Assert-Equal '正常' (Get-SupportNetworkEnvironmentStatus $envPass) '网络环境：多数大陆目标成功为正常'
+$envPartial = @(
+    [pscustomobject]@{ Name = 'Google'; Success = $true }
+    [pscustomobject]@{ Name = 'Cloudflare'; Success = $false }
+    [pscustomobject]@{ Name = 'GitHub'; Success = $false }
+)
+Assert-Equal '部分可用' (Get-SupportNetworkEnvironmentStatus $envPartial) '网络环境：少数海外目标成功为部分可用'
+Assert-Equal '异常' (Get-SupportNetworkEnvironmentStatus @([pscustomobject]@{ Success = $false })) '网络环境：全部目标失败为异常'
+$environmentConclusion = [pscustomobject]@{
+    LocalNetworkHealthy = $true
+    Proxy = [pscustomobject]@{ AnyProxy = $true }
+    Public = [pscustomobject]@{ Success = $true; Country = '日本'; Region = ''; City = '东京' }
+    MainlandStatus = '正常'; OverseasStatus = '部分可用'; GoogleStatus = '无法访问'
+}
+Assert-Contains (Get-SupportNetworkEnvironmentConclusion $environmentConclusion) '公网出口位于日本 / 东京' '网络环境：结论使用公网出口位置'
+Assert-Contains (Get-SupportNetworkEnvironmentConclusion $environmentConclusion) '海外网络部分可用' '网络环境：结论保留分组状态'
+
 Write-Host '正在验证磁盘和系统服务规则...' -ForegroundColor Cyan
 
 function Get-SupportDiskInfo {

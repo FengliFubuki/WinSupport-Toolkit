@@ -1,12 +1,13 @@
-# Windows IT Support Toolkit V1.1
+# Windows IT Support Toolkit V1.2
 
 面向 IT Support / Desktop Support 的 Windows 日常运维辅助工具。使用 PowerShell + Windows 自带命令 + winget 实现，无第三方依赖。
-当前为 V1.1 第一阶段开发版本。
+当前为 V1.2 开发版本。
 
 ## 版本定位
 
 - V1.0 = Stable：已完成 Windows 10 / Windows 11 实机测试，视为稳定基线。
 - V1.1 = Diagnostic Engine / Network Diagnosis Upgrade：诊断引擎基础、网络诊断升级、一键诊断汇总、重新检测和结构化报告兼容。
+- V1.2 = Network Environment：代理、VPN/TUN、公网出口、出口地区及中国大陆/海外网络可达性检测。
 
 ## 文件说明
 
@@ -15,7 +16,7 @@
 | `IT-Support-Toolkit.ps1` | 主程序（所有功能） |
 | `run.bat` | 双击启动入口（自动选择 pwsh / Windows PowerShell，绕过执行策略） |
 | `config\software.json` | 常用软件快捷安装列表（可自行增删改） |
-| `tests\Test-DiagnosticRules.ps1` | V1.1 诊断规则和报告兼容性测试 |
+| `tests\Test-DiagnosticRules.ps1` | V1.1/V1.2 诊断规则和报告兼容性测试 |
 | `reports\` | 程序运行时自动创建，用于保存导出报告 |
 | `logs\` | 程序运行时自动创建，用于保存基础日志 |
 
@@ -39,6 +40,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 - 一键诊断：系统、CPU/内存、C盘、网络、Windows Update、系统文件签名、关键服务、电池和打印机综合检查
 - 网络诊断：网卡连接状态、MAC、IPv4、子网掩码、DHCP、DNS、网关、公网、DNS 解析和 HTTPS/TLS
 - 代理感知：识别 Windows 系统代理、WinHTTP 代理和 VPN/TUN；公网直连失败不会单独归因于网卡故障
+- 网络环境：检测 WinINET、WinHTTP、环境变量和虚拟网络适配器；显示公网出口 IP/国家/地区/城市/运营商/ASN
+- 网络可达性：使用多个大陆与海外 HTTPS 目标，分别判断中国大陆网络、海外网络和 Google；单目标失败不会判定整体断网
 - 诊断结论：使用 PASS / WARNING / FAIL / INFO 统一状态，输出问题说明和处理建议
 - 修复后复检：网络诊断可按建议执行现有安全修复，并自动重新检测、比较修复结果
 - 打印机：查看打印机与队列、清理队列、重启 Print Spooler、一键修复
@@ -58,6 +61,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 
 [2] 工具箱
     ├─ 网络
+        ├─ 网络环境
     ├─ 打印机
     ├─ 系统
     ├─ 磁盘
@@ -80,12 +84,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticRules.ps1
 ```
 
-测试使用模拟数据验证正常网络、系统代理、WinHTTP、VPN/TUN、代理不可用、无 IPv4、网关/DNS 异常、公网 Ping 被阻断、磁盘阈值、Windows Update 服务、关键服务和 TXT / JSON 报告兼容性，不会修改系统配置。
+测试使用模拟数据验证正常网络、系统代理、WinHTTP、VPN/TUN、代理不可用、无 IPv4、网关/DNS 异常、公网 Ping 被阻断、磁盘阈值、Windows Update 服务、关键服务和 TXT / JSON 报告兼容性，不会修改系统配置。网络环境公网请求需在 Windows 实机上验证。
 
 ## 兼容性验证
 
 - V1.0 已完成 Windows 10 / Windows 11 实机验证。
-- V1.1 发布前需要分别在 Windows 10 + PowerShell 5.1、Windows 11 + PowerShell 5.1 上执行测试脚本，并检查主菜单、网络诊断、一键诊断、修复后复检及 TXT / JSON 报告。
+- V1.2 发布前需要分别在 Windows 10 + PowerShell 5.1、Windows 11 + PowerShell 5.1 上执行测试脚本，并检查网络环境、网络诊断、一键诊断、修复后复检及 TXT / JSON 报告。
 
 ## 常用软件列表维护
 
