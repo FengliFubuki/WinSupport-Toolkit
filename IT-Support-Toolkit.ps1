@@ -2698,7 +2698,6 @@ function Get-SupportPrinterJobs {
 function Show-SupportPrinterList {
     Write-SectionTitle '已安装打印机'
     $printers = @(Get-SupportPrinters)
-    $networkEnvironment = Get-SupportNetworkEnvironmentInfo
     if ($printers.Count -eq 0) {
         Write-NoticeText '未检测到打印机。'
         return
@@ -2924,6 +2923,83 @@ function Invoke-SupportPrinterOneKeyFix {
     }
 }
 
+function Get-SupportPrinterRepairScripts {
+    return @(
+        [pscustomobject]@{
+            Id = 1
+            Name = '打印组件深度修复（3 个系统文件）'
+            RelativePath = '打印机修复脚本\FixPrintSpoolerbat（2）\fix-printer (2).bat'
+            Warning = '将停止 Print Spooler，并替换 localspl.dll、win32spl.dll、spoolsv.exe；脚本会创建备份文件。'
+        }
+        [pscustomobject]@{
+            Id = 2
+            Name = 'win32spl.dll 修复 + RPC 打印兼容设置'
+            RelativePath = '打印机修复脚本\打印机修复\Fix_PrintSpooler.bat'
+            Warning = '将停止 Print Spooler、替换 win32spl.dll，并将 RpcAuthnLevelPrivacyEnabled 设置为 0。'
+        }
+    )
+}
+
+function Invoke-SupportPrinterRepairScript {
+    param([int]$ScriptId)
+    $scriptInfo = Get-SupportPrinterRepairScripts | Where-Object { $_.Id -eq $ScriptId } | Select-Object -First 1
+    if (-not $scriptInfo) {
+        Write-ErrorText '未找到指定的打印机修复程序。'
+        return $false
+    }
+    $scriptPath = Join-Path $script:ScriptRoot $scriptInfo.RelativePath
+    if (-not (Test-SupportPathExists $scriptPath)) {
+        Write-ErrorText ('修复脚本不存在：' + $scriptPath)
+        Write-Log ('打印机修复脚本不存在: ' + $scriptPath) 'ERROR'
+        return $false
+    }
+    Write-SectionTitle $scriptInfo.Name
+    Write-WarnText $scriptInfo.Warning
+    Write-WarnText '这是系统级修复操作，可能影响当前打印任务和 Print Spooler；请确认脚本来源可信。'
+    if (-not (Confirm-SupportAdminOperation '运行打印机系统文件修复脚本。')) { return $false }
+    if (-not (Get-SupportConfirmation '确认继续执行该修复程序？')) {
+        Write-NoticeText '操作已取消。'
+        return $false
+    }
+    try {
+        Write-Host '正在启动修复程序，完成后请关闭脚本窗口返回工具...' -ForegroundColor Gray
+        $argumentList = @('/d', '/c', 'call', ('"' + $scriptPath + '"'))
+        $process = Start-Process -FilePath 'cmd.exe' -ArgumentList $argumentList -WorkingDirectory (Split-Path -Parent $scriptPath) -Wait -PassThru -ErrorAction Stop
+        if ($process.ExitCode -eq 0) {
+            Write-OkText '打印机修复程序已执行完成。'
+            Write-Log ('打印机修复程序执行完成: ' + $scriptInfo.Name) 'INFO'
+            return $true
+        }
+        Write-WarnText ('打印机修复程序返回退出码 ' + $process.ExitCode + '，请查看脚本窗口中的具体信息。')
+        Write-Log ('打印机修复程序返回退出码 ' + $process.ExitCode + ': ' + $scriptInfo.Name) 'WARN'
+        return $false
+    }
+    catch {
+        Write-ErrorText ('启动打印机修复程序失败：' + $_.Exception.Message)
+        Write-Log ('启动打印机修复程序失败: ' + $_.Exception.Message) 'ERROR'
+        return $false
+    }
+}
+
+function Show-SupportPrinterRepairMenu {
+    while ($true) {
+        Write-SectionTitle '打印机修复'
+        Write-Host '[1] 一键修复打印机（服务和队列）'
+        Write-Host '[2] 打印组件深度修复（替换 3 个系统文件）'
+        Write-Host '[3] win32spl.dll 修复 + RPC 打印兼容设置'
+        Write-Host '[0] 返回'
+        Write-Host ''
+        $choice = Read-MenuSelection 3
+        if ($choice -eq 0) { return }
+        Write-Host ''
+        switch ($choice) {
+            1 { Invoke-SupportPrinterOneKeyFix; Write-PressAnyKeyToReturn }
+            2 { Invoke-SupportPrinterRepairScript -ScriptId 1; Write-PressAnyKeyToReturn }
+            3 { Invoke-SupportPrinterRepairScript -ScriptId 2; Write-PressAnyKeyToReturn }
+        }
+    }
+}
+
 function Show-PrinterMenu {
     while ($true) {
         Write-SectionTitle '打印机'
@@ -2931,7 +3007,7 @@ function Show-PrinterMenu {
         Write-Host '[2] 查看打印队列'
         Write-Host '[3] 清理打印队列'
         Write-Host '[4] 重启打印服务'
-        Write-Host '[5] 一键修复打印机'
+        Write-Host '[5] 打印机修复'
         Write-Host '[0] 返回'
         Write-Host ''
         $choice = Read-MenuSelection 5
@@ -2954,8 +3030,7 @@ function Show-PrinterMenu {
                 Write-PressAnyKeyToReturn
             }
             5 {
-                Invoke-SupportPrinterOneKeyFix
-                Write-PressAnyKeyToReturn
+                Show-SupportPrinterRepairMenu
             }
             0 { return }
         }
@@ -4116,6 +4191,7 @@ function New-SupportReportSnapshot {
     $disks = @(Get-SupportDiskInfo)
     $battery = Get-SupportBattery
     $printers = @(Get-SupportPrinters)
+    $networkEnvironment = Get-SupportNetworkEnvironmentInfo
     return [pscustomobject]@{
         ToolName       = $script:ToolName
         ToolVersion    = $script:ToolVersion
