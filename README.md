@@ -50,6 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 - 磁盘：磁盘空间、临时文件扫描/清理（只限安全临时目录）、回收站清理、磁盘状态
 - 软件：winget 搜索 / 安装 / 卸载 / 更新 / 已安装列表，常用软件快捷安装
 - 电脑信息：CIM/WMI 读取硬件与系统信息
+- 电脑相关：配置信息页面显示 CPU、显卡、内存条 DDR 类型、硬盘协议、显示器参数，以及 BIOS/SMBIOS 可暴露的主板 M.2、内存和 PCIe 槽位数量
 - 导出报告：TXT / JSON，自动保存到 `reports\`；TXT 保留 V1.0 格式并增加结构化诊断段落
 
 ## UI 导航
@@ -67,7 +68,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
     ├─ 系统
     ├─ 磁盘
     ├─ 软件
-    └─ 设备
+    └─ 电脑相关
+        ├─ PC 信息
+        ├─ 设备状态
+        └─ 配置信息
 
 [3] 报告
     ├─ 本次诊断结果
@@ -91,6 +95,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticR
 
 - V1.0 已完成 Windows 10 / Windows 11 实机验证。
 - V1.2 发布前需要分别在 Windows 10 + PowerShell 5.1、Windows 11 + PowerShell 5.1 上执行测试脚本，并检查网络环境、网络诊断、一键诊断、修复后复检及 TXT / JSON 报告。
+- M.2 外形和主板槽位数量依赖 BIOS/SMBIOS 暴露；Windows 无法可靠识别时会显示“未由 BIOS 暴露”。
 
 ## 常用软件列表维护
 

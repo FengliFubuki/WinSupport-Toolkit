@@ -315,6 +315,8 @@ $printerRepairScripts = @(Get-SupportPrinterRepairScripts)
 Assert-Equal 2 $printerRepairScripts.Count '打印机修复：集成两个修复程序'
 Assert-Contains ($printerRepairScripts[0].RelativePath) 'repair-printer-components.bat' '打印机修复：深度修复脚本路径'
 Assert-Contains ($printerRepairScripts[1].RelativePath) 'repair-win32spl-rpc.bat' '打印机修复：win32spl 修复脚本路径'
+Assert-Equal 'DDR4' (Convert-SupportMemoryTypeText 26) '电脑配置：识别 DDR4'
+Assert-Equal 'DDR5' (Convert-SupportMemoryTypeText 34) '电脑配置：识别 DDR5'
 
 Write-Host '正在验证磁盘和系统服务规则...' -ForegroundColor Cyan
 

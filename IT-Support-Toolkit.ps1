@@ -698,6 +698,98 @@ function Show-SupportComputerInfo {
 }
 
 # ===========================================================================
+# 电脑配置
+# ===========================================================================
+
+function Convert-SupportMemoryTypeText {
+    param([int]$MemoryType)
+    switch ($MemoryType) {
+        20 { return 'DDR' }
+        21 { return 'DDR2' }
+        22 { return 'DDR2 FB-DIMM' }
+        24 { return 'DDR3' }
+        26 { return 'DDR4' }
+        27 { return 'LPDDR' }
+        28 { return 'LPDDR2' }
+        29 { return 'LPDDR3' }
+        30 { return 'LPDDR4' }
+        34 { return 'DDR5' }
+        default { return '未知（SMBIOS ' + $MemoryType + '）' }
+    }
+}
+
+function Get-SupportComputerConfiguration {
+    $configuration = [ordered]@{
+        Motherboard = [pscustomobject]@{ Manufacturer = '无法获取'; Product = '无法获取'; SerialNumber = '无法获取' }
+        Cpu = @(); Gpu = @(); Memory = @(); MemorySlotCount = $null; Disks = @(); Monitors = @(); Slots = @()
+        M2SlotCount = $null; PcieSlotCount = $null; SlotNote = '主板槽位信息取决于 BIOS/SMBIOS 是否暴露。'
+    }
+    try {
+        $board = Get-CimInstance -ClassName Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($board) {
+            $configuration.Motherboard = [pscustomobject]@{ Manufacturer = [string]$board.Manufacturer; Product = [string]$board.Product; SerialNumber = [string]$board.SerialNumber }
+        }
+    } catch {}
+    try {
+        foreach ($cpu in @(Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue)) {
+            $configuration.Cpu += [pscustomobject]@{ Name = [string]$cpu.Name; Cores = $cpu.NumberOfCores; Threads = $cpu.NumberOfLogicalProcessors; MaxClockMHz = $cpu.MaxClockSpeed }
+        }
+    } catch {}
+    try {
+        foreach ($gpu in @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)) {
+            $configuration.Gpu += [pscustomobject]@{ Name = [string]$gpu.Name; VideoMemory = if ($gpu.AdapterRAM) { Format-SupportByteSize ([long]$gpu.AdapterRAM) } else { '无法获取' }; Resolution = if ($gpu.CurrentHorizontalResolution -and $gpu.CurrentVerticalResolution) { $gpu.CurrentHorizontalResolution.ToString() + ' x ' + $gpu.CurrentVerticalResolution.ToString() } else { '无法获取' }; RefreshRate = if ($gpu.CurrentRefreshRate) { $gpu.CurrentRefreshRate.ToString() + ' Hz' } else { '无法获取' } }
+        }
+    } catch {}
+    try {
+        $memoryItems = @(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction SilentlyContinue)
+        foreach ($memory in $memoryItems) {
+            $memoryType = if ($memory.SMBIOSMemoryType) { Convert-SupportMemoryTypeText ([int]$memory.SMBIOSMemoryType) } else { Convert-SupportMemoryTypeText ([int]$memory.MemoryType) }
+            $configuration.Memory += [pscustomobject]@{ Bank = [string]$memory.DeviceLocator; Manufacturer = [string]$memory.Manufacturer; PartNumber = [string]$memory.PartNumber; Capacity = if ($memory.Capacity) { Format-SupportByteSize ([long]$memory.Capacity) } else { '无法获取' }; Type = $memoryType; Speed = if ($memory.ConfiguredClockSpeed) { $memory.ConfiguredClockSpeed.ToString() + ' MHz' } elseif ($memory.Speed) { $memory.Speed.ToString() + ' MHz' } else { '无法获取' } }
+        }
+        $memoryArray = Get-CimInstance -ClassName Win32_PhysicalMemoryArray -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($memoryArray -and $memoryArray.MemoryDevices) { $configuration.MemorySlotCount = [int]$memoryArray.MemoryDevices }
+    } catch {}
+    try {
+        foreach ($disk in @(Get-PhysicalDisk -ErrorAction SilentlyContinue)) {
+            $bus = [string]$disk.BusType
+            $protocol = switch -Regex ($bus) { '(?i)NVMe' { 'NVMe / PCIe'; break } '(?i)SATA' { 'SATA'; break } '(?i)USB' { 'USB'; break } default { if ($bus) { $bus } else { '无法获取' } } }
+            $configuration.Disks += [pscustomobject]@{ Name = if ($disk.FriendlyName) { [string]$disk.FriendlyName } else { '未命名磁盘' }; MediaType = [string]$disk.MediaType; Protocol = $protocol; Size = if ($disk.Size) { Format-SupportByteSize ([long]$disk.Size) } else { '无法获取' }; Health = [string]$disk.HealthStatus; FormFactor = if ([string]$disk.FriendlyName -match '(?i)M\.2|M2|NGFF') { '可能为 M.2（型号推断）' } else { '无法由系统可靠确认' } }
+        }
+    } catch {}
+    if ($configuration.Disks.Count -eq 0) {
+        try { foreach ($disk in @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction SilentlyContinue)) { $configuration.Disks += [pscustomobject]@{ Name = [string]$disk.Model; MediaType = ''; Protocol = if ($disk.InterfaceType) { [string]$disk.InterfaceType } else { '无法获取' }; Size = if ($disk.Size) { Format-SupportByteSize ([long]$disk.Size) } else { '无法获取' }; Health = ''; FormFactor = '无法由系统可靠确认' } } } catch {}
+    }
+    try {
+        $monitorIds = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue)
+        $monitorParams = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue)
+        foreach ($monitor in $monitorIds) {
+            $manufacturer = -join @($monitor.ManufacturerName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }); $name = -join @($monitor.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }); $serial = -join @($monitor.SerialNumberID | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ })
+            $param = $monitorParams | Where-Object { $_.InstanceName -eq $monitor.InstanceName } | Select-Object -First 1
+            $configuration.Monitors += [pscustomobject]@{ Manufacturer = $manufacturer; Name = if ($name) { $name } else { '未知显示器' }; SerialNumber = $serial; PhysicalSize = if ($param.MaxHorizontalImageSize -and $param.MaxVerticalImageSize) { $param.MaxHorizontalImageSize.ToString() + ' x ' + $param.MaxVerticalImageSize.ToString() + ' cm' } else { '无法获取' }; MaxRefreshRate = if ($param.MaxRefreshRate) { $param.MaxRefreshRate.ToString() + ' Hz' } else { '无法获取' } }
+        }
+    } catch {}
+    try {
+        foreach ($slot in @(Get-CimInstance -ClassName Win32_SystemSlot -ErrorAction SilentlyContinue)) {
+            $text = (([string]$slot.SlotDesignation) + ' ' + ([string]$slot.Description)).Trim(); $isM2 = ($text -match '(?i)M\.2|M2|NGFF'); $isPcie = ($text -match '(?i)PCI.?Express|PCIe' -or ([int]$slot.SlotType) -in @(10, 13, 14, 15, 16, 17, 18))
+            $configuration.Slots += [pscustomobject]@{ Designation = $text; SlotType = [string]$slot.SlotType; CurrentUsage = [string]$slot.CurrentUsage; IsM2 = $isM2; IsPcie = $isPcie }
+        }
+        if ($configuration.Slots.Count -gt 0) { $configuration.M2SlotCount = @($configuration.Slots | Where-Object { $_.IsM2 }).Count; $configuration.PcieSlotCount = @($configuration.Slots | Where-Object { $_.IsPcie }).Count }
+    } catch {}
+    return [pscustomobject]$configuration
+}
+
+function Show-SupportComputerConfiguration {
+    Write-SupportUiHeader '配置信息'; Write-Host '正在读取硬件配置，请稍候...' -ForegroundColor Gray; $configuration = Get-SupportComputerConfiguration; Write-Host ''
+    Write-SubTitle '主板'; Write-Host ('厂商：' + $configuration.Motherboard.Manufacturer); Write-Host ('型号：' + $configuration.Motherboard.Product); Write-Host ('序列号：' + $configuration.Motherboard.SerialNumber)
+    Write-SubTitle 'CPU'; foreach ($cpu in @($configuration.Cpu)) { Write-Host ($cpu.Name + '；' + $cpu.Cores + ' 核 / ' + $cpu.Threads + ' 线程；最高 ' + $cpu.MaxClockMHz + ' MHz') }; if ($configuration.Cpu.Count -eq 0) { Write-Host '无法获取' }
+    Write-SubTitle '显卡'; foreach ($gpu in @($configuration.Gpu)) { Write-Host ($gpu.Name + '；显存 ' + $gpu.VideoMemory + '；分辨率 ' + $gpu.Resolution + '；刷新率 ' + $gpu.RefreshRate) }; if ($configuration.Gpu.Count -eq 0) { Write-Host '无法获取' }
+    Write-SubTitle '内存'; Write-Host ('已识别内存条：' + $configuration.Memory.Count + ' 条；主板内存槽：' + $(if ($configuration.MemorySlotCount) { $configuration.MemorySlotCount } else { '未由 BIOS 暴露' })); foreach ($memory in @($configuration.Memory)) { Write-Host ($memory.Bank + '：' + $memory.Capacity + ' ' + $memory.Type + ' ' + $memory.Speed + '；' + $memory.Manufacturer + ' ' + $memory.PartNumber) }
+    Write-SubTitle '硬盘'; foreach ($disk in @($configuration.Disks)) { Write-Host ($disk.Name + '；' + $disk.MediaType + '；协议：' + $disk.Protocol + '；容量：' + $disk.Size + '；形态：' + $disk.FormFactor) }; if ($configuration.Disks.Count -eq 0) { Write-Host '无法获取' }
+    Write-SubTitle '显示器'; foreach ($monitor in @($configuration.Monitors)) { Write-Host ($monitor.Manufacturer + ' ' + $monitor.Name + '；尺寸：' + $monitor.PhysicalSize + '；最大刷新率：' + $monitor.MaxRefreshRate + '；序列号：' + $monitor.SerialNumber) }; if ($configuration.Monitors.Count -eq 0) { Write-Host '无法获取或显示器未暴露 EDID 信息' }
+    Write-SubTitle '主板扩展槽'; Write-Host ('M.2 槽：' + $(if ($configuration.M2SlotCount -ne $null) { $configuration.M2SlotCount } else { '未由 BIOS 暴露' })); Write-Host ('PCIe 槽：' + $(if ($configuration.PcieSlotCount -ne $null) { $configuration.PcieSlotCount } else { '未由 BIOS 暴露' })); foreach ($slot in @($configuration.Slots)) { Write-Host ('- ' + $slot.Designation + '；类型：' + $slot.SlotType + '；使用状态：' + $slot.CurrentUsage) }; Write-Host ('说明：' + $configuration.SlotNote) -ForegroundColor Gray; Write-PressAnyKeyToReturn
+}
+
+# ===========================================================================
 # 网络
 # ===========================================================================
 
@@ -5130,18 +5222,20 @@ function Show-SupportDashboard {
 
 function Show-SupportDeviceToolbox {
     while ($true) {
-        Write-SupportUiHeader '设备'
+        Write-SupportUiHeader '电脑相关'
         Write-Host '[1] PC 信息'
         Write-Host '[2] 设备状态'
+        Write-Host '[3] 配置信息'
         Write-Host '[0] 返回'
         Write-Host ''
-        $choice = Read-MenuSelection 2
+        $choice = Read-MenuSelection 3
         switch ($choice) {
             1 {
                 Show-SupportComputerInfo
                 Write-PressAnyKeyToReturn
             }
             2 { Show-SupportCategoryDetail '设备' }
+            3 { Show-SupportComputerConfiguration }
             0 { return }
         }
     }
@@ -5155,7 +5249,7 @@ function Show-SupportToolbox {
         Write-Host '[3] 系统'
         Write-Host '[4] 磁盘'
         Write-Host '[5] 软件'
-        Write-Host '[6] 设备'
+        Write-Host '[6] 电脑相关'
         Write-Host '[0] 返回'
         Write-Host ''
         $choice = Read-MenuSelection 6
