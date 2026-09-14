@@ -45,7 +45,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\IT-Support-Toolkit.ps1
 - 诊断结论：使用 PASS / WARNING / FAIL / INFO 统一状态，输出问题说明和处理建议
 - 修复后复检：网络诊断可按建议执行现有安全修复，并自动重新检测、比较修复结果
 - 打印机：查看打印机与队列、清理队列、重启 Print Spooler、一键修复
-- 打印机修复：集成两个用户提供的系统级修复脚本；分别用于替换打印组件文件，以及替换 `win32spl.dll` 并设置 RPC 打印兼容项
+- 打印机修复：集成两个系统级修复脚本，文件位于 `PrinterRepairScripts\`；分别用于替换打印组件文件，以及替换 `win32spl.dll` 并设置 RPC 打印兼容项
 - 系统修复：SFC、DISM 检查/修复、Windows Update 服务检查与基础修复
 - 磁盘：磁盘空间、临时文件扫描/清理（只限安全临时目录）、回收站清理、磁盘状态
 - 软件：winget 搜索 / 安装 / 卸载 / 更新 / 已安装列表，常用软件快捷安装

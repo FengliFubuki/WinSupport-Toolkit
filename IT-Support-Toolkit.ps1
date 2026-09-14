@@ -2928,13 +2928,13 @@ function Get-SupportPrinterRepairScripts {
         [pscustomobject]@{
             Id = 1
             Name = '打印组件深度修复（3 个系统文件）'
-            RelativePath = '打印机修复脚本\FixPrintSpoolerbat（2）\fix-printer (2).bat'
+            RelativePath = 'PrinterRepairScripts\DeepRepair\repair-printer-components.bat'
             Warning = '将停止 Print Spooler，并替换 localspl.dll、win32spl.dll、spoolsv.exe；脚本会创建备份文件。'
         }
         [pscustomobject]@{
             Id = 2
             Name = 'win32spl.dll 修复 + RPC 打印兼容设置'
-            RelativePath = '打印机修复脚本\打印机修复\Fix_PrintSpooler.bat'
+            RelativePath = 'PrinterRepairScripts\Win32SplRpcRepair\repair-win32spl-rpc.bat'
             Warning = '将停止 Print Spooler、替换 win32spl.dll，并将 RpcAuthnLevelPrivacyEnabled 设置为 0。'
         }
     )

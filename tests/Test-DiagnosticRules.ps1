@@ -313,8 +313,8 @@ Assert-Contains (Get-SupportNetworkEnvironmentConclusion $environmentConclusion)
 Assert-Contains (Get-SupportNetworkEnvironmentConclusion $environmentConclusion) '海外网络部分可用' '网络环境：结论保留分组状态'
 $printerRepairScripts = @(Get-SupportPrinterRepairScripts)
 Assert-Equal 2 $printerRepairScripts.Count '打印机修复：集成两个修复程序'
-Assert-Contains ($printerRepairScripts[0].RelativePath) 'fix-printer (2).bat' '打印机修复：深度修复脚本路径'
-Assert-Contains ($printerRepairScripts[1].RelativePath) 'Fix_PrintSpooler.bat' '打印机修复：win32spl 修复脚本路径'
+Assert-Contains ($printerRepairScripts[0].RelativePath) 'repair-printer-components.bat' '打印机修复：深度修复脚本路径'
+Assert-Contains ($printerRepairScripts[1].RelativePath) 'repair-win32spl-rpc.bat' '打印机修复：win32spl 修复脚本路径'
 
 Write-Host '正在验证磁盘和系统服务规则...' -ForegroundColor Cyan
 
