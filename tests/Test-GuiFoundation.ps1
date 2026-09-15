@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $xamlPath = Join-Path $root 'gui\MainWindow.xaml'
@@ -8,6 +8,14 @@ $corePath = Join-Path $root 'IT-Support-Toolkit.ps1'
 foreach ($path in @($xamlPath, $guiPath, $corePath)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "找不到 GUI 基础文件：$path" }
 }
+
+foreach ($scriptFile in @($guiPath, $corePath)) {
+    $bytes = [System.IO.File]::ReadAllBytes($scriptFile)
+    if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+        throw "PowerShell 脚本不是 UTF-8 BOM 编码：$scriptFile"
+    }
+}
+Write-Host '[PASS] PowerShell 脚本 UTF-8 BOM 编码检查通过' -ForegroundColor Green
 
 $xaml = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
 $null = [xml]$xaml

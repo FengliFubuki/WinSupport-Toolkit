@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
     WPF front-end for WinSupport Toolkit V1.3.
     The existing IT-Support-Toolkit.ps1 remains the source of truth for
