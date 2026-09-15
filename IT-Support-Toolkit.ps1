@@ -76,10 +76,10 @@ function Set-SupportConsoleEncoding {
 function Write-Banner {
     Clear-Host -ErrorAction SilentlyContinue
     Write-Host ''
-    Write-Host '========================================' -ForegroundColor Cyan
-    Write-Host '       Windows IT Support Toolkit' -ForegroundColor Cyan
-    Write-Host '       V1.2 - IT Support 诊断与运维工具' -ForegroundColor Cyan
-    Write-Host '========================================' -ForegroundColor Cyan
+    Write-Host '╭────────────────────────────────────────╮' -ForegroundColor DarkCyan
+    Write-Host '│  🧸 WinSupport 小助手 · V1.2            │' -ForegroundColor Cyan
+    Write-Host '│  可爱的电脑急救站，准备好为你服务啦！   │' -ForegroundColor Magenta
+    Write-Host '╰────────────────────────────────────────╯' -ForegroundColor DarkCyan
     Write-Host ''
 }
 
@@ -174,7 +174,7 @@ function Get-SupportConfirmation {
 function Read-MenuSelection {
     param([int]$MaxChoice)
     while ($true) {
-        $answer = Read-Host '请选择'
+        $answer = Read-Host '请输入选项数字 ✨'
         if ($answer -match '^\d+$') {
             $num = [int]$answer
             if ($num -ge 0 -and $num -le $MaxChoice) {
@@ -4685,12 +4685,49 @@ function Write-SupportUiHeader {
     param([string]$CurrentPage)
     Clear-Host -ErrorAction SilentlyContinue
     Write-Host ''
-    Write-Host '============================================================' -ForegroundColor DarkCyan
-    Write-Host ' WinSupport Toolkit' -ForegroundColor Cyan
-    Write-Host ' [1] 总览   [2] 工具箱   [3] 报告   [0] 退出' -ForegroundColor DarkGray
-    Write-Host (' 当前页面：' + $CurrentPage) -ForegroundColor Gray
-    Write-Host '============================================================' -ForegroundColor DarkCyan
+    Write-Host '╭────────────────────────────────────────────────────────────╮' -ForegroundColor DarkCyan
+    Write-Host '│  🧸 WinSupport 小助手                                      │' -ForegroundColor Cyan
+    Write-Host '│  你的电脑急救站                                             │' -ForegroundColor DarkCyan
+    Write-Host '├────────────────────────────────────────────────────────────┤' -ForegroundColor DarkCyan
+    Write-Host '│  1. 🏠 总览    2. 🧰 工具箱    3. 📋 报告    0. 🚪 退出   │' -ForegroundColor DarkGray
+    Write-Host ('│  当前页面：' + $CurrentPage + (' ' * [Math]::Max(1, 51 - $CurrentPage.Length)) + '│') -ForegroundColor Gray
+    Write-Host '╰────────────────────────────────────────────────────────────╯' -ForegroundColor DarkCyan
     Write-Host ''
+}
+
+function Get-SupportUiCategoryIcon {
+    param([string]$Category)
+    switch ($Category) {
+        '设备' { return '🖥️' }
+        'Windows' { return '🪟' }
+        '系统' { return '⚙️' }
+        '磁盘' { return '💾' }
+        '网络' { return '🌐' }
+        '打印机' { return '🖨️' }
+        default { return '🔹' }
+    }
+}
+
+function Get-SupportUiStatusIcon {
+    param([string]$Status)
+    switch ($Status) {
+        '正常' { return '✅' }
+        '注意' { return '🟡' }
+        '问题' { return '🔴' }
+        default { return '⚪' }
+    }
+}
+
+function Write-SupportUiMascot {
+    param([string]$Mood = 'happy')
+    $face = switch ($Mood) {
+        'work' { '•̀ᴗ•́' }
+        'alert' { '⊙﹏⊙' }
+        default { '＾▽＾' }
+    }
+    Write-Host ('       ʕ ᵔᴥᵔ ʔ   ' + $face) -ForegroundColor Magenta
+    Write-Host '      /|  🧰  |\' -ForegroundColor Magenta
+    Write-Host '       |     |' -ForegroundColor Magenta
 }
 
 function Get-SupportUiCategory {
@@ -4800,21 +4837,24 @@ function Write-SupportDashboardStatus {
     )
     $padding = 10 - $Label.Length
     if ($padding -lt 1) { $padding = 1 }
-    Write-Host ($Label + (' ' * $padding) + '[' + $Status + ']') -ForegroundColor (Get-SupportUiStatusColor $Status)
+    $icon = Get-SupportUiCategoryIcon $Label
+    $statusIcon = Get-SupportUiStatusIcon $Status
+    Write-Host ($icon + ' ' + $Label + (' ' * $padding) + $statusIcon + ' ' + $Status) -ForegroundColor (Get-SupportUiStatusColor $Status)
 }
 
 function Show-SupportDiagnosisProgress {
     param($States)
     Write-SupportUiHeader '全面诊断'
-    Write-Host '正在检查电脑...' -ForegroundColor Cyan
+    Write-SupportUiMascot 'work'
+    Write-Host '🔍 小助手正在检查电脑，请稍等一下喔……' -ForegroundColor Cyan
     Write-Host ''
     foreach ($step in @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')) {
         $state = [string]$States[$step]
         switch ($state) {
-            '完成' { Write-Host ('[完成] ' + $step) -ForegroundColor Green }
-            '进行' { Write-Host ('[进行] ' + $step) -ForegroundColor Yellow }
-            '失败' { Write-Host ('[失败] ' + $step) -ForegroundColor Red }
-            default { Write-Host ('[等待] ' + $step) -ForegroundColor Gray }
+            '完成' { Write-Host ('✅ ' + (Get-SupportUiCategoryIcon $step) + ' ' + $step + '检查完成') -ForegroundColor Green }
+            '进行' { Write-Host ('🔎 ' + (Get-SupportUiCategoryIcon $step) + ' 正在检查' + $step + '……') -ForegroundColor Yellow }
+            '失败' { Write-Host ('🔴 ' + (Get-SupportUiCategoryIcon $step) + ' ' + $step + '检查失败') -ForegroundColor Red }
+            default { Write-Host ('⏳ ' + (Get-SupportUiCategoryIcon $step) + ' 等待检查' + $step) -ForegroundColor Gray }
         }
     }
     Write-Host ''
@@ -5134,7 +5174,7 @@ function Show-SupportCategoryList {
         foreach ($category in $categories) {
             $results = @(Get-SupportSessionCategoryResults $category)
             $status = Get-SupportUiCategoryStatus $results
-            Write-Host ('[' + $idx + '] ' + $category + '  [' + $status + ']') -ForegroundColor (Get-SupportUiStatusColor $status)
+            Write-Host ($idx.ToString() + '. ' + (Get-SupportUiCategoryIcon $category) + ' ' + $category + '  ' + (Get-SupportUiStatusIcon $status) + ' ' + $status) -ForegroundColor (Get-SupportUiStatusColor $status)
             $idx++
         }
         Write-Host '[0] 返回'
@@ -5280,7 +5320,7 @@ function Show-SupportFullDiagnosisResult {
     param($Session)
     while ($true) {
         Write-SupportUiHeader '全面诊断结果'
-        Write-Host ('[' + $Session.OverallStatus + '] 电脑状态') -ForegroundColor (Get-SupportUiStatusColor $Session.OverallStatus)
+        Write-Host ((Get-SupportUiStatusIcon $Session.OverallStatus) + ' 电脑状态：' + $Session.OverallStatus) -ForegroundColor (Get-SupportUiStatusColor $Session.OverallStatus)
         Write-Host ('最近检查：' + $Session.GeneratedAt.ToString('HH:mm')) -ForegroundColor Gray
         Write-Host ''
         Write-SupportUiCategorySummary $Session
@@ -5331,7 +5371,8 @@ function Show-SupportDashboard {
     while ($true) {
         Write-SupportUiHeader '总览'
         if (-not $script:DiagnosticSession) {
-            Write-Host '[未检测] 尚未完成全面诊断' -ForegroundColor Gray
+            Write-SupportUiMascot 'work'
+            Write-Host '⚪ 尚未完成全面诊断' -ForegroundColor Gray
             Write-Host ''
             Write-Host '最近检查：未检测' -ForegroundColor Gray
             Write-Host ''
@@ -5342,8 +5383,8 @@ function Show-SupportDashboard {
             Write-SupportDashboardStatus '打印机' '未检测'
             Write-SupportDashboardStatus '设备' '未检测'
             Write-Host ''
-            Write-Host '[1] 开始全面诊断'
-            Write-Host '[0] 返回'
+            Write-Host '1. 🔍 开始全面诊断'
+            Write-Host '0. 🚪 返回'
             Write-Host ''
             $choice = Read-MenuSelection 1
             switch ($choice) {
@@ -5363,7 +5404,7 @@ function Show-SupportDashboard {
             '问题' { '电脑发现问题' }
             default { '电脑尚未完成全面诊断' }
         }
-        Write-Host ('[' + $session.OverallStatus + '] ' + $overallText) -ForegroundColor (Get-SupportUiStatusColor $session.OverallStatus)
+        Write-Host ((Get-SupportUiStatusIcon $session.OverallStatus) + ' ' + $overallText) -ForegroundColor (Get-SupportUiStatusColor $session.OverallStatus)
         Write-Host ('最近检查：' + $session.GeneratedAt.ToString('HH:mm')) -ForegroundColor Gray
         if ($session.ProblemCount -gt 0 -or $session.AttentionCount -gt 0) {
             Write-Host ('问题 ' + $session.ProblemCount + ' 项，注意 ' + $session.AttentionCount + ' 项') -ForegroundColor Gray
@@ -5373,10 +5414,10 @@ function Show-SupportDashboard {
             Write-SupportDashboardStatus $category ([string]$session.CategoryStatuses[$category])
         }
         Write-Host ''
-        Write-Host '[1] 查看本次结果'
-        Write-Host '[2] 重新全面诊断'
-        Write-Host '[3] 查看分类详情'
-        Write-Host '[0] 返回'
+        Write-Host '1. 📋 查看本次结果'
+        Write-Host '2. 🔍 重新全面诊断'
+        Write-Host '3. 🧩 查看分类详情'
+        Write-Host '0. 🚪 返回'
         Write-Host ''
         $choice = Read-MenuSelection 3
         switch ($choice) {
@@ -5398,10 +5439,10 @@ function Show-SupportDashboard {
 function Show-SupportDeviceToolbox {
     while ($true) {
         Write-SupportUiHeader '电脑相关'
-        Write-Host '[1] PC 信息'
-        Write-Host '[2] 设备状态'
-        Write-Host '[3] 配置信息'
-        Write-Host '[0] 返回'
+        Write-Host '1. 💻 PC 信息'
+        Write-Host '2. 🖥️ 设备状态'
+        Write-Host '3. 🧾 配置信息'
+        Write-Host '0. 🚪 返回'
         Write-Host ''
         $choice = Read-MenuSelection 3
         switch ($choice) {
@@ -5419,13 +5460,13 @@ function Show-SupportDeviceToolbox {
 function Show-SupportToolbox {
     while ($true) {
         Write-SupportUiHeader '工具箱'
-        Write-Host '[1] 网络'
-        Write-Host '[2] 打印机'
-        Write-Host '[3] 系统'
-        Write-Host '[4] 磁盘'
-        Write-Host '[5] 软件'
-        Write-Host '[6] 电脑相关'
-        Write-Host '[0] 返回'
+        Write-Host '1. 🌐 网络'
+        Write-Host '2. 🖨️ 打印机'
+        Write-Host '3. ⚙️ 系统'
+        Write-Host '4. 💾 磁盘'
+        Write-Host '5. 📦 软件'
+        Write-Host '6. 🖥️ 电脑相关'
+        Write-Host '0. 🚪 返回'
         Write-Host ''
         $choice = Read-MenuSelection 6
         Write-Host ''
@@ -5546,10 +5587,11 @@ function Show-SupportReportCenter {
 function Show-SupportMainMenu {
     while ($true) {
         Write-SupportUiHeader '主菜单'
-        Write-Host '[1] 总览'
-        Write-Host '[2] 工具箱'
-        Write-Host '[3] 报告'
-        Write-Host '[0] 退出'
+        Write-SupportUiMascot
+        Write-Host '1. 🏠 总览        查看电脑健康状态'
+        Write-Host '2. 🧰 工具箱      网络、系统、打印机等工具'
+        Write-Host '3. 📋 报告        查看或导出诊断报告'
+        Write-Host '0. 🚪 退出        安全关闭小助手'
         Write-Host ''
         $choice = Read-MenuSelection 3
         switch ($choice) {
@@ -5558,7 +5600,7 @@ function Show-SupportMainMenu {
             3 { Show-SupportReportCenter }
             0 {
                 Write-Host ''
-                Write-Host '感谢使用 WinSupport Toolkit。' -ForegroundColor Green
+                Write-Host '🎀 感谢使用 WinSupport 小助手，祝你的电脑一直健健康康！' -ForegroundColor Green
                 Write-Log '工具退出'
                 exit 0
             }
