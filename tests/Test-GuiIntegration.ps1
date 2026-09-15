@@ -81,4 +81,8 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     $hostExe = Join-Path $PSHOME $(if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' })
     & $hostExe -Sta -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'gui\WinSupport-GUI.ps1') -SmokeTest
     if ($LASTEXITCODE -ne 0) { throw 'GUI 实际按钮与后台诊断冒烟测试失败。' }
+
+    $actionOutput = @(& $hostExe -NoProfile -ExecutionPolicy Bypass -File $corePath -Console -SkipBanner -NoPause -Action ComputerInfo 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw 'GUI 工具动作入口的 Windows 实机验证失败。' }
+    Assert-GuiTest (($actionOutput -join [Environment]::NewLine) -match '电脑信息') '工具动作入口可在 Windows 中运行原有功能'
 }

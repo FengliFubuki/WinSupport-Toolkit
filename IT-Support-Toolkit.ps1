@@ -20,7 +20,8 @@
 param(
     [switch]$SkipBanner,
     [switch]$Console,
-    [string]$Action
+    [string]$Action,
+    [switch]$NoPause
 )
 
 $ErrorActionPreference = 'Continue'
@@ -29,6 +30,7 @@ $script:ToolName    = 'Windows IT Support Toolkit'
 $script:ToolVersion = '1.3.0'
 $script:ToolAuthor  = 'FengliFubuki'
 $script:RequestedAction = $Action
+$script:NoPause = $NoPause
 $script:ScriptRoot  = $PSScriptRoot
 if (-not $script:ScriptRoot) {
     try {
@@ -239,6 +241,9 @@ function Confirm-SupportAdminOperation {
             if ($script:RequestedAction) {
                 $argList += @('-Action', $script:RequestedAction)
             }
+            if ($script:NoPause) {
+                $argList += '-NoPause'
+            }
             Write-Host '正在请求管理员权限（UAC）...' -ForegroundColor Yellow
             Start-Process -FilePath $exe -ArgumentList $argList -Verb RunAs -Wait -ErrorAction Stop
             exit 0
@@ -282,6 +287,7 @@ function Invoke-SupportNativeCommand {
 }
 
 function Write-PressAnyKeyToReturn {
+    if ($script:NoPause) { return }
     Write-Host ''
     Read-Host '按回车键返回...' | Out-Null
 }
