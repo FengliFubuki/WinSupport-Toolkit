@@ -35,6 +35,7 @@ foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot',
     if ($gui -notmatch [regex]::Escape($symbol)) { throw "GUI 未复用核心入口：$symbol" }
 }
 if ($gui -notmatch 'Invoke-SupportFullDiagnosis\s+-Quiet') { throw 'GUI 全面诊断没有启用静默模式' }
+if ($gui -match '(?<!\$)\(\s*if\b') { throw 'GUI 包含会在运行时把 if 误当命令的参数表达式' }
 
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     Add-Type -AssemblyName PresentationCore

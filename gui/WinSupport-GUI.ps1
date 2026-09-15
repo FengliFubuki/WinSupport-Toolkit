@@ -272,7 +272,8 @@ function Show-GuiToolActions {
     if (-not $panel) { return }
     $panel.Children.Clear()
     $actions = @(Get-SupportToolActionCatalog -Category $Category)
-    Set-GuiText 'ToolActionsTitle' (if ($actions.Count -gt 0) { '可用工具（始终可用）' } else { '可用工具' })
+    $toolActionsTitle = if ($actions.Count -gt 0) { '可用工具（始终可用）' } else { '可用工具' }
+    Set-GuiText 'ToolActionsTitle' $toolActionsTitle
     Set-GuiText 'ToolActionsHint' '检查结果只用于提示，不会隐藏维护功能。点击工具会打开独立控制台，原有确认和管理员权限流程保持不变。'
 
     foreach ($action in $actions) {
@@ -382,11 +383,16 @@ function Invoke-GuiSmokeTest {
     if (-not $script:GuiState.Session) { throw 'GUI 冒烟测试失败：全面诊断没有更新 GUI 会话。' }
 
     $networkButton = Find-GuiControl 'NavNetwork'
+    $script:GuiState.LastError = ''
     $networkButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+    if ($script:GuiState.LastError) { throw ('GUI 冒烟测试失败：分类页发生运行时错误：' + $script:GuiState.LastError) }
     if ((Find-GuiControl 'DetailPanel').Visibility -ne 'Visible') { throw 'GUI 冒烟测试失败：网络导航按钮没有打开详情页。' }
     if (@(Get-SupportSessionCategoryResults '网络').Count -eq 0) { throw 'GUI 冒烟测试失败：GUI 会话没有同步到分类详情。' }
+    $toolPanel = Find-GuiControl 'ToolActionsPanel'
+    $expectedToolCount = @(Get-SupportToolActionCatalog -Category '网络').Count
+    if (-not $toolPanel -or $toolPanel.Children.Count -ne $expectedToolCount) { throw 'GUI 冒烟测试失败：网络工具卡片没有完整生成。' }
 
-    Write-Host '[PASS] GUI 按钮、后台全面诊断和分类详情链路通过' -ForegroundColor Green
+    Write-Host '[PASS] GUI 按钮、后台全面诊断、分类详情和工具卡片链路通过' -ForegroundColor Green
 }
 
 function Start-GuiExport {
