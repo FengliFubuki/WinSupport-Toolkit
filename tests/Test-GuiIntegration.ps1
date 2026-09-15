@@ -66,3 +66,9 @@ finally {
 }
 
 Write-Host ("GUI 集成测试完成，共 $script:TestCount 项。") -ForegroundColor Cyan
+
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $hostExe = Join-Path $PSHOME $(if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' })
+    & $hostExe -Sta -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'gui\WinSupport-GUI.ps1') -SmokeTest
+    if ($LASTEXITCODE -ne 0) { throw 'GUI 实际按钮与后台诊断冒烟测试失败。' }
+}

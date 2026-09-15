@@ -5,7 +5,10 @@
     diagnostics, repair actions and report export.
 #>
 
-param([switch]$ValidateOnly)
+param(
+    [switch]$ValidateOnly,
+    [switch]$SmokeTest
+)
 
 $ErrorActionPreference = 'Stop'
 $guiRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -31,7 +34,7 @@ catch {
     $fallbackError = $_
     Write-Host 'WPF GUI 初始化失败，将回退到控制台模式。' -ForegroundColor Yellow
     Write-Host $fallbackError.Exception.Message -ForegroundColor Gray
-    if ($ValidateOnly) { throw $fallbackError }
+    if ($ValidateOnly -or $SmokeTest) { throw $fallbackError }
     if (Test-Path -LiteralPath $corePath) {
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $corePath -Console
     }
@@ -40,7 +43,7 @@ catch {
 
 $script:GuiWindow = $window
 $script:CorePath = $corePath
-$script:GuiState = @{ Session = $null; CurrentCategory = ''; PendingPowerShell = $null; PendingAsync = $null; PendingKind = ''; PendingCategory = '' }
+$script:GuiState = @{ Session = $null; CurrentCategory = ''; PendingPowerShell = $null; PendingAsync = $null; PendingKind = ''; PendingCategory = ''; LastError = '' }
 $script:GuiTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:GuiTimer.Interval = [TimeSpan]::FromMilliseconds(250)
 
@@ -59,6 +62,8 @@ function Show-GuiException {
     param($ErrorRecord)
     $message = if ($ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { [string]$ErrorRecord }
     try { Write-Log ('GUI 操作失败：' + $message) 'ERROR' } catch {}
+    $script:GuiState.LastError = $message
+    if ($SmokeTest) { return }
     [System.Windows.MessageBox]::Show($message, '操作失败', 'OK', 'Error') | Out-Null
 }
 
@@ -136,7 +141,7 @@ function Start-GuiAsyncOperation {
     }
     catch {
         if ($ps) { $ps.Dispose() }
-        [System.Windows.MessageBox]::Show($_.Exception.Message, '操作失败', 'OK', 'Error') | Out-Null
+        Show-GuiException $_
         return $false
     }
 }
@@ -153,6 +158,7 @@ function Complete-GuiAsyncOperation {
         if ($kind -eq 'diagnosis') {
             $script:GuiState.Session = $result | Where-Object { $_.PSObject.Properties['OverallStatus'] } | Select-Object -Last 1
             if (-not $script:GuiState.Session) { throw $(if ($backgroundErrors.Count -gt 0) { $backgroundErrors -join [Environment]::NewLine } else { '全面诊断没有返回有效结果。' }) }
+            $script:DiagnosticSession = $script:GuiState.Session
             if ($backgroundErrors.Count -gt 0) { try { Write-Log ('GUI 全面诊断警告：' + ($backgroundErrors -join ' | ')) 'WARN' } catch {} }
             Update-GuiOverview
             Show-GuiDiagnosis
@@ -160,6 +166,7 @@ function Complete-GuiAsyncOperation {
         elseif ($kind -eq 'category') {
             $script:GuiState.Session = $result | Where-Object { $_.PSObject.Properties['OverallStatus'] } | Select-Object -Last 1
             if (-not $script:GuiState.Session) { throw $(if ($backgroundErrors.Count -gt 0) { $backgroundErrors -join [Environment]::NewLine } else { '分类诊断没有返回有效结果。' }) }
+            $script:DiagnosticSession = $script:GuiState.Session
             if ($backgroundErrors.Count -gt 0) { try { Write-Log ('GUI 分类诊断警告：' + ($backgroundErrors -join ' | ')) 'WARN' } catch {} }
             Show-GuiCategoryDetail $category
             Update-GuiOverview
@@ -312,8 +319,34 @@ function Start-GuiDiagnosis {
 function Start-GuiCategoryDiagnosis {
     param([string]$Category)
     $escaped = $script:CorePath.Replace("'", "''")
-    $code = ". '$escaped'; Invoke-SupportCategoryDiagnosis '$($Category.Replace("'", "''"))'"
+    $existingJson = if ($script:GuiState.Session) { @($script:GuiState.Session.Results) | ConvertTo-Json -Depth 8 -Compress } else { '[]' }
+    $escapedResults = $existingJson.Replace("'", "''")
+    $escapedCategory = $Category.Replace("'", "''")
+    $code = ". '$escaped'; `$existing = @(ConvertFrom-Json '$escapedResults'); if (`$existing.Count -gt 0) { Set-SupportDiagnosticSession `$existing | Out-Null }; Invoke-SupportCategoryDiagnosis '$escapedCategory'"
     Start-GuiAsyncOperation $code 'category' $Category | Out-Null
+}
+
+function Invoke-GuiSmokeTest {
+    $script:GuiState.LastError = ''
+    $startButton = Find-GuiControl 'StartDiagnosisButton'
+    $startButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+    if (-not $script:GuiState.PendingPowerShell) { throw 'GUI 冒烟测试失败：开始全面诊断按钮没有启动后台任务。' }
+
+    $deadline = (Get-Date).AddSeconds(150)
+    while ($script:GuiState.PendingPowerShell -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 100
+        Complete-GuiAsyncOperation
+    }
+    if ($script:GuiState.PendingPowerShell) { throw 'GUI 冒烟测试失败：全面诊断在 150 秒内没有完成。' }
+    if ($script:GuiState.LastError) { throw ('GUI 冒烟测试失败：' + $script:GuiState.LastError) }
+    if (-not $script:GuiState.Session) { throw 'GUI 冒烟测试失败：全面诊断没有更新 GUI 会话。' }
+
+    $networkButton = Find-GuiControl 'NavNetwork'
+    $networkButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+    if ((Find-GuiControl 'DetailPanel').Visibility -ne 'Visible') { throw 'GUI 冒烟测试失败：网络导航按钮没有打开详情页。' }
+    if (@(Get-SupportSessionCategoryResults '网络').Count -eq 0) { throw 'GUI 冒烟测试失败：GUI 会话没有同步到分类详情。' }
+
+    Write-Host '[PASS] GUI 按钮、后台全面诊断和分类详情链路通过' -ForegroundColor Green
 }
 
 function Start-GuiExport {
@@ -383,7 +416,10 @@ try {
     if ($permission) { $permission.Text = if ($script:IsAdminUser) { '管理员' } else { '普通用户' }; $permission.Foreground = if ($script:IsAdminUser) { '#A9E6C7' } else { '#FFFFFF' } }
     Add-GuiEvents
     Show-GuiOverview
-    if ($ValidateOnly) {
+    if ($SmokeTest) {
+        Invoke-GuiSmokeTest
+    }
+    elseif ($ValidateOnly) {
         foreach ($name in @('NavOverview','NavDiagnosis','NavReports','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton')) {
             if (-not (Find-GuiControl $name)) { throw "GUI 验证失败，找不到控件：$name" }
         }
@@ -392,7 +428,7 @@ try {
     else { [void]$script:GuiWindow.ShowDialog() }
 }
 catch {
-    if ($ValidateOnly) { throw }
+    if ($ValidateOnly -or $SmokeTest) { throw }
     [System.Windows.MessageBox]::Show($_.Exception.Message, 'WinSupport GUI 错误', 'OK', 'Error') | Out-Null
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $corePath -Console
 }
