@@ -7,9 +7,9 @@ if /I "%~1"=="--console" goto console
 
 where pwsh.exe >nul 2>nul
 if %errorlevel%==0 (
-  pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0gui\WinSupport-GUI.ps1"
+  pwsh.exe -Sta -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0gui\WinSupport-GUI.ps1"
 ) else (
-  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0gui\WinSupport-GUI.ps1"
+  powershell.exe -Sta -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0gui\WinSupport-GUI.ps1"
 )
 goto end
 

@@ -4869,15 +4869,16 @@ function Get-SupportDiagnosisModuleFailure {
 }
 
 function Invoke-SupportFullDiagnosis {
+    param([switch]$Quiet)
     $steps = @('设备', 'Windows', '系统', '磁盘', '网络', '打印机')
     $states = [ordered]@{}
     foreach ($step in $steps) { $states[$step] = '等待' }
     $allResults = @()
 
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['设备'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     $computerResults = @()
     try {
         $computerResults += @(Get-SupportComputerDetectionChecks)
@@ -4892,20 +4893,20 @@ function Invoke-SupportFullDiagnosis {
     }
     $allResults += $deviceResults
     $states['设备'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['Windows'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     $windowsResults = @($computerResults | Where-Object { (Get-SupportUiCategory $_) -eq 'Windows' })
     if ($windowsResults.Count -eq 0) {
         $windowsResults = Get-SupportDiagnosisModuleFailure '电脑' 'Windows 系统' '未返回 Windows 状态结果'
     }
     $allResults += $windowsResults
     $states['Windows'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['系统'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     try {
         $allResults += @(Get-SupportWindowsUpdateChecks)
         $allResults += @(Get-SupportSystemIntegrityChecks)
@@ -4915,10 +4916,10 @@ function Invoke-SupportFullDiagnosis {
         $allResults += Get-SupportDiagnosisModuleFailure '系统' '系统检测' $_.Exception.Message
     }
     $states['系统'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['磁盘'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     try {
         $allResults += @(Get-SupportDiskDetectionChecks)
     }
@@ -4926,10 +4927,10 @@ function Invoke-SupportFullDiagnosis {
         $allResults += Get-SupportDiagnosisModuleFailure '磁盘' '磁盘检测' $_.Exception.Message
     }
     $states['磁盘'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['网络'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     try {
         $allResults += @(Get-SupportNetworkDiagnosis)
     }
@@ -4937,10 +4938,10 @@ function Invoke-SupportFullDiagnosis {
         $allResults += Get-SupportDiagnosisModuleFailure '网络' '网络检测' $_.Exception.Message
     }
     $states['网络'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $states['打印机'] = '进行'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
     try {
         $allResults += @(Get-SupportPrinterDetectionChecks)
     }
@@ -4948,7 +4949,7 @@ function Invoke-SupportFullDiagnosis {
         $allResults += Get-SupportDiagnosisModuleFailure '打印机' '打印机检测' $_.Exception.Message
     }
     $states['打印机'] = '完成'
-    Show-SupportDiagnosisProgress $states
+    if (-not $Quiet) { Show-SupportDiagnosisProgress $states }
 
     $session = Set-SupportDiagnosticSession $allResults
     return $session

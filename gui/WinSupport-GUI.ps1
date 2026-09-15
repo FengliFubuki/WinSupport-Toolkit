@@ -5,6 +5,8 @@
     diagnostics, repair actions and report export.
 #>
 
+param([switch]$ValidateOnly)
+
 $ErrorActionPreference = 'Stop'
 $guiRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $corePath = Join-Path (Split-Path -Parent $guiRoot) 'IT-Support-Toolkit.ps1'
@@ -29,6 +31,7 @@ catch {
     $fallbackError = $_
     Write-Host 'WPF GUI 初始化失败，将回退到控制台模式。' -ForegroundColor Yellow
     Write-Host $fallbackError.Exception.Message -ForegroundColor Gray
+    if ($ValidateOnly) { throw $fallbackError }
     if (Test-Path -LiteralPath $corePath) {
         & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $corePath -Console
     }
@@ -146,19 +149,20 @@ function Complete-GuiAsyncOperation {
     $result = $null
     try {
         $result = @($ps.EndInvoke($script:GuiState.PendingAsync))
-        if ($ps.Streams.Error.Count -gt 0) {
-            throw (($ps.Streams.Error | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
-        }
+        $backgroundErrors = @($ps.Streams.Error | ForEach-Object { $_.ToString() })
         if ($kind -eq 'diagnosis') {
             $script:GuiState.Session = $result | Where-Object { $_.PSObject.Properties['OverallStatus'] } | Select-Object -Last 1
-            if ($script:GuiState.Session) {
-                Update-GuiOverview
-                Show-GuiDiagnosis
-            }
+            if (-not $script:GuiState.Session) { throw $(if ($backgroundErrors.Count -gt 0) { $backgroundErrors -join [Environment]::NewLine } else { '全面诊断没有返回有效结果。' }) }
+            if ($backgroundErrors.Count -gt 0) { try { Write-Log ('GUI 全面诊断警告：' + ($backgroundErrors -join ' | ')) 'WARN' } catch {} }
+            Update-GuiOverview
+            Show-GuiDiagnosis
         }
         elseif ($kind -eq 'category') {
             $script:GuiState.Session = $result | Where-Object { $_.PSObject.Properties['OverallStatus'] } | Select-Object -Last 1
-            if ($script:GuiState.Session) { Show-GuiCategoryDetail $category; Update-GuiOverview }
+            if (-not $script:GuiState.Session) { throw $(if ($backgroundErrors.Count -gt 0) { $backgroundErrors -join [Environment]::NewLine } else { '分类诊断没有返回有效结果。' }) }
+            if ($backgroundErrors.Count -gt 0) { try { Write-Log ('GUI 分类诊断警告：' + ($backgroundErrors -join ' | ')) 'WARN' } catch {} }
+            Show-GuiCategoryDetail $category
+            Update-GuiOverview
         }
         elseif ($kind -eq 'export') {
             $paths = @($result | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_.PSObject.Properties['Paths']) { $_.Paths } })
@@ -166,7 +170,7 @@ function Complete-GuiAsyncOperation {
                 [System.Windows.MessageBox]::Show(('导出成功：' + [Environment]::NewLine + ($paths -join [Environment]::NewLine)), '报告已导出', 'OK', 'Information') | Out-Null
                 Show-GuiReports
             }
-            else { throw '没有生成报告文件。' }
+            else { throw $(if ($backgroundErrors.Count -gt 0) { $backgroundErrors -join [Environment]::NewLine } else { '没有生成报告文件。' }) }
         }
     }
     catch {
@@ -300,7 +304,7 @@ function Show-GuiPlaceholder {
 
 function Start-GuiDiagnosis {
     $escaped = $script:CorePath.Replace("'", "''")
-    $code = ". '$escaped'; Invoke-SupportFullDiagnosis"
+    $code = ". '$escaped'; Invoke-SupportFullDiagnosis -Quiet"
     Show-GuiDiagnosis
     Start-GuiAsyncOperation $code 'diagnosis' | Out-Null
 }
@@ -379,9 +383,16 @@ try {
     if ($permission) { $permission.Text = if ($script:IsAdminUser) { '管理员' } else { '普通用户' }; $permission.Foreground = if ($script:IsAdminUser) { '#A9E6C7' } else { '#FFFFFF' } }
     Add-GuiEvents
     Show-GuiOverview
-    [void]$script:GuiWindow.ShowDialog()
+    if ($ValidateOnly) {
+        foreach ($name in @('NavOverview','NavDiagnosis','NavReports','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton')) {
+            if (-not (Find-GuiControl $name)) { throw "GUI 验证失败，找不到控件：$name" }
+        }
+        Write-Host '[PASS] GUI 初始化与事件绑定检查通过' -ForegroundColor Green
+    }
+    else { [void]$script:GuiWindow.ShowDialog() }
 }
 catch {
+    if ($ValidateOnly) { throw }
     [System.Windows.MessageBox]::Show($_.Exception.Message, 'WinSupport GUI 错误', 'OK', 'Error') | Out-Null
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $corePath -Console
 }

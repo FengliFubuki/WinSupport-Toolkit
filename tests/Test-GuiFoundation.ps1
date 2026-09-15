@@ -9,7 +9,7 @@ foreach ($path in @($xamlPath, $guiPath, $corePath)) {
     if (-not (Test-Path -LiteralPath $path)) { throw "找不到 GUI 基础文件：$path" }
 }
 
-foreach ($scriptFile in @($guiPath, $corePath)) {
+foreach ($scriptFile in @($guiPath, $corePath, (Join-Path $root 'tests\Test-GuiIntegration.ps1'))) {
     $bytes = [System.IO.File]::ReadAllBytes($scriptFile)
     if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
         throw "PowerShell 脚本不是 UTF-8 BOM 编码：$scriptFile"
