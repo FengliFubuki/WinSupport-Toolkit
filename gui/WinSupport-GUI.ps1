@@ -266,6 +266,39 @@ function Show-GuiDiagnosis {
     }
 }
 
+function Show-GuiToolActions {
+    param([string]$Category)
+    $panel = Find-GuiControl 'ToolActionsPanel'
+    if (-not $panel) { return }
+    $panel.Children.Clear()
+    $actions = @(Get-SupportToolActionCatalog -Category $Category)
+    Set-GuiText 'ToolActionsTitle' (if ($actions.Count -gt 0) { '可用工具（始终可用）' } else { '可用工具' })
+    Set-GuiText 'ToolActionsHint' '检查结果只用于提示，不会隐藏维护功能。点击工具会打开独立控制台，原有确认和管理员权限流程保持不变。'
+
+    foreach ($action in $actions) {
+        $card = New-Object System.Windows.Controls.Border
+        $card.Width = 212; $card.MinHeight = 126; $card.Margin = '0,0,12,12'; $card.Padding = '12'
+        $card.Background = if ($action.IsRepair) { '#FFF8F2' } else { '#F7F5FB' }
+        $card.CornerRadius = '8'
+        $stack = New-Object System.Windows.Controls.StackPanel
+        $title = New-Object System.Windows.Controls.TextBlock
+        $title.Text = [string]$action.Name; $title.FontWeight = 'SemiBold'; $title.TextWrapping = 'Wrap'
+        [void]$stack.Children.Add($title)
+        $description = New-Object System.Windows.Controls.TextBlock
+        $description.Text = [string]$action.Description; $description.FontSize = 12; $description.Foreground = '#77738D'; $description.TextWrapping = 'Wrap'; $description.Margin = '0,5,0,8'
+        [void]$stack.Children.Add($description)
+        $button = New-Object System.Windows.Controls.Button
+        $button.Tag = [string]$action.Id; $button.HorizontalAlignment = 'Left'; $button.Padding = '9,5'; $button.Margin = '0'
+        $button.Content = if ($action.IsRepair) { '执行修复 / 维护' } else { '打开工具' }
+        $button.Background = if ($action.IsRepair) { (New-Object System.Windows.Media.BrushConverter).ConvertFromString('#F7E6D5') } else { (New-Object System.Windows.Media.BrushConverter).ConvertFromString('#EEEAFE') }
+        $button.Foreground = if ($action.IsRepair) { (New-Object System.Windows.Media.BrushConverter).ConvertFromString('#895225') } else { (New-Object System.Windows.Media.BrushConverter).ConvertFromString('#4C3C9D') }
+        $button.Add_Click({ param($sender, $eventArgs); Start-GuiToolConsoleAction ([string]$sender.Tag) })
+        [void]$stack.Children.Add($button)
+        $card.Child = $stack
+        [void]$panel.Children.Add($card)
+    }
+}
+
 function Show-GuiCategoryDetail {
     param([string]$Category)
     $script:GuiState.CurrentCategory = $Category
@@ -286,7 +319,14 @@ function Show-GuiCategoryDetail {
         }
         $border.Child = $stack; [void]$itemsControl.Items.Add($border)
     }
-    $compat = Find-GuiControl 'CompatibilityButton'; $compat.Visibility = if (Test-SupportCategoryHasRepair $Category) { 'Visible' } else { 'Collapsed' }
+    if ($results.Count -eq 0) {
+        $empty = New-Object System.Windows.Controls.TextBlock
+        $empty.Text = if ($Category -eq '软件') { '软件管理不属于诊断分类；下方提供完整的 winget 工具入口。' } else { '尚未运行此分类检测；可点击“重新检测”，或直接使用下方工具。' }
+        $empty.TextWrapping = 'Wrap'; $empty.Foreground = '#77738D'; $empty.Margin = '0,0,0,8'
+        [void]$itemsControl.Items.Add($empty)
+    }
+    Show-GuiToolActions $Category
+    $compat = Find-GuiControl 'CompatibilityButton'; if ($compat) { $compat.Visibility = 'Visible' }
 }
 
 function Show-GuiReports {
@@ -368,6 +408,36 @@ function Open-GuiCompatibilityMode {
     Start-Process -FilePath $exe -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$script:CorePath,'-Console') | Out-Null
 }
 
+function ConvertTo-GuiProcessArgument {
+    param([string]$Value)
+    if ($null -eq $Value) { return '""' }
+    if ($Value -match '[\s"]') { return ('"' + $Value.Replace('"', '\"') + '"') }
+    return $Value
+}
+
+function Start-GuiToolConsoleAction {
+    param([string]$ActionId)
+    $action = Get-SupportToolActionCatalog | Where-Object { $_.Id -eq $ActionId } | Select-Object -First 1
+    if (-not $action) { throw ('未找到工具操作：' + $ActionId) }
+
+    $message = if ($action.IsRepair) {
+        ('“' + $action.Name + '”可能修改系统、网络、服务或软件。' + [Environment]::NewLine + [Environment]::NewLine +
+            '继续后会打开原有的控制台工具；其中仍会要求你确认，并在需要时显示 Windows UAC 管理员授权。')
+    }
+    else {
+        ('将打开“' + $action.Name + '”的原有控制台工具。' + [Environment]::NewLine + '该窗口会显示完整过程和结果。')
+    }
+    $messageIcon = if ($action.IsRepair) { 'Warning' } else { 'Information' }
+    $choice = [System.Windows.MessageBox]::Show($message, $action.Name, 'YesNo', $messageIcon)
+    if ($choice -ne 'Yes') { return }
+
+    $exe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source } else { (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source }
+    if (-not $exe) { $exe = 'powershell.exe' }
+    $arguments = @('-NoExit','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$script:CorePath,'-Console','-SkipBanner','-Action',$ActionId)
+    $argumentLine = (($arguments | ForEach-Object { ConvertTo-GuiProcessArgument ([string]$_) }) -join ' ')
+    Start-Process -FilePath $exe -ArgumentList $argumentLine -ErrorAction Stop | Out-Null
+}
+
 function Add-GuiClickHandler {
     param(
         [System.Windows.Controls.Button]$Button,
@@ -393,7 +463,7 @@ function Add-GuiEvents {
                 'overview' { Show-GuiOverview }
                 'diagnosis' { Show-GuiDiagnosis }
                 'reports' { Show-GuiReports }
-                default { if ($tag -in @('网络','系统','磁盘','打印机','设备','Windows')) { Show-GuiCategoryDetail $tag } else { Show-GuiPlaceholder $tag } }
+                default { if ($tag -in @('网络','系统','磁盘','打印机','设备','Windows','软件')) { Show-GuiCategoryDetail $tag } else { Show-GuiPlaceholder $tag } }
             }
         }
     }

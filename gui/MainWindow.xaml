@@ -123,9 +123,13 @@
                             <TextBlock x:Name="DetailHeading" Text="分类详情" FontSize="20" FontWeight="SemiBold" />
                             <TextBlock x:Name="DetailStatusText" Text="未检测" Foreground="{StaticResource Muted}" Margin="0,5,0,16" />
                             <ItemsControl x:Name="DetailItems" />
+                            <Separator Margin="0,18,0,14" />
+                            <TextBlock x:Name="ToolActionsTitle" Text="可用工具" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock x:Name="ToolActionsHint" Text="这些工具始终可用；修复操作会在独立控制台中保留原有确认与管理员权限流程。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,5,0,10" />
+                            <WrapPanel x:Name="ToolActionsPanel" />
                             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                                 <Button x:Name="RefreshCategoryButton" Style="{StaticResource SoftButton}" Content="重新检测" Margin="0,0,8,0" />
-                                <Button x:Name="CompatibilityButton" Style="{StaticResource SoftButton}" Content="在兼容模式打开" Margin="0" />
+                                <Button x:Name="CompatibilityButton" Style="{StaticResource SoftButton}" Content="打开完整兼容工具箱" Margin="0" />
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -155,7 +159,7 @@
                     <Border Background="White" CornerRadius="14" Padding="24">
                         <StackPanel>
                             <TextBlock x:Name="PlaceholderTitle" Text="工具" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Text="这个页面会逐步接入现有工具。当前功能可通过兼容模式打开，所有原有确认和权限逻辑保持不变。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,8,0,18" />
+                            <TextBlock Text="这个页面的工具会保留在独立控制台中运行，所有原有确认和权限逻辑保持不变。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,8,0,18" />
                             <Button x:Name="PlaceholderCompatibilityButton" Style="{StaticResource PrimaryButton}" Content="在兼容模式打开" HorizontalAlignment="Left" />
                         </StackPanel>
                     </Border>
@@ -168,7 +172,7 @@
                 <TextBlock Text="IT Assistant" FontSize="24" FontWeight="SemiBold" Foreground="#4C3C9D" HorizontalAlignment="Center" />
                 <TextBlock Text="🧑‍💻  🛠️  ✨" FontSize="48" HorizontalAlignment="Center" Margin="0,24" />
                 <TextBlock x:Name="AssistantStatusText" Text="准备好了，开始检查这台电脑吧 ✨" TextWrapping="Wrap" TextAlignment="Center" FontSize="16" Foreground="#4C3C9D" />
-                <TextBlock Text="后续可替换为本地 PNG 插画" TextAlignment="Center" Foreground="#8278B4" FontSize="12" Margin="0,30,0,0" />
+                <TextBlock Text="Created by FengliFubuki" TextAlignment="Center" Foreground="#8278B4" FontSize="12" Margin="0,30,0,0" />
             </StackPanel>
         </Border>
     </Grid>

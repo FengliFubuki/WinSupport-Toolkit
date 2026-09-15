@@ -36,6 +36,16 @@ foreach ($category in @('设备','Windows','系统','磁盘','网络','打印机
     Assert-GuiTest ($session.CategoryStatuses[$category] -eq '正常') ("分类状态正确：$category")
 }
 
+$toolActions = @(Get-SupportToolActionCatalog)
+Assert-GuiTest ($toolActions.Count -ge 30) 'GUI 工具清单包含原有维护功能'
+foreach ($actionId in @('NetworkCommonFix','PrinterOneKeyFix','SystemSfc','WindowsUpdateFix','TempCleanup','SoftwareUpdate','ComputerConfiguration')) {
+    Assert-GuiTest (($toolActions.Id -contains $actionId)) ("GUI 工具清单保留：$actionId")
+}
+$script:ToolActionInvoked = $false
+function Show-SupportComputerInfo { $script:ToolActionInvoked = $true }
+Invoke-SupportToolAction -Id 'ComputerInfo'
+Assert-GuiTest $script:ToolActionInvoked '工具动作分发会调用原有后端函数'
+
 function Get-SupportComputerFacts {
     return [pscustomobject]@{
         ComputerName='TEST-PC'; CurrentUser='TEST\User'; IsAdmin=$false; Manufacturer='Test'; Model='VM'; SerialNumber='N/A'

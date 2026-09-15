@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 ============================================================================
-  Windows IT Support Toolkit V1.2
+  WinSupport Toolkit V1.3.0 - WPF GUI Foundation
 --------------------------------------------------------------------------
   用途：面向 IT Support / Desktop Support 的日常运维辅助工具
   运行要求：Windows 10 / Windows 11（需 Windows PowerShell 5.1+）
@@ -19,13 +19,16 @@
 
 param(
     [switch]$SkipBanner,
-    [switch]$Console
+    [switch]$Console,
+    [string]$Action
 )
 
 $ErrorActionPreference = 'Continue'
 
 $script:ToolName    = 'Windows IT Support Toolkit'
 $script:ToolVersion = '1.3.0'
+$script:ToolAuthor  = 'FengliFubuki'
+$script:RequestedAction = $Action
 $script:ScriptRoot  = $PSScriptRoot
 if (-not $script:ScriptRoot) {
     try {
@@ -78,7 +81,7 @@ function Write-Banner {
     Clear-Host -ErrorAction SilentlyContinue
     Write-Host ''
     Write-Host '+--------------------------------------------------+' -ForegroundColor DarkCyan
-    Write-Host '|  WinSupport Toolkit  v1.2                       |' -ForegroundColor Cyan
+    Write-Host '|  WinSupport Toolkit  v1.3.0                     |' -ForegroundColor Cyan
     Write-Host '|  电脑急救站                                      |' -ForegroundColor DarkCyan
     Write-Host '+--------------------------------------------------+' -ForegroundColor DarkCyan
     Write-Host ''
@@ -232,7 +235,10 @@ function Confirm-SupportAdminOperation {
             if ($PSVersionTable.PSEdition -eq 'Core') {
                 $exe = 'pwsh.exe'
             }
-            $argList = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'))
+            $argList = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'), '-Console', '-SkipBanner')
+            if ($script:RequestedAction) {
+                $argList += @('-Action', $script:RequestedAction)
+            }
             Write-Host '正在请求管理员权限（UAC）...' -ForegroundColor Yellow
             Start-Process -FilePath $exe -ArgumentList $argList -Verb RunAs -Wait -ErrorAction Stop
             exit 0
@@ -5623,6 +5629,108 @@ function Show-SupportMainMenu {
 # 启动与主菜单
 # ===========================================================================
 
+function Get-SupportToolActionCatalog {
+    <#
+        GUI 和兼容控制台共用的功能清单。不要根据诊断状态过滤此清单：
+        健康状态仅用于提示，用户始终可以主动运行检查、维护和修复工具。
+    #>
+    param([string]$Category)
+
+    $items = @(
+        [pscustomobject]@{ Id = 'NetworkInfo'; Category = '网络'; Name = '网络技术详情'; Description = '查看网卡、IP、网关、DNS 与代理信息。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'NetworkEnvironment'; Category = '网络'; Name = '网络环境检查'; Description = '检查内网、互联网与常见服务连通性。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'NetworkDiagnosis'; Category = '网络'; Name = '网络诊断与复检'; Description = '运行现有网络诊断，并按结果提供建议修复。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'NetworkFlushDns'; Category = '网络'; Name = '刷新 DNS 缓存'; Description = '执行 ipconfig /flushdns。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'NetworkRenewIp'; Category = '网络'; Name = '重新获取 IP'; Description = '会短暂断开网络并重新获取 DHCP 地址。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'NetworkResetWinsock'; Category = '网络'; Name = '重置 Winsock'; Description = '需要管理员权限，完成后通常需要重启。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'NetworkResetTcpIp'; Category = '网络'; Name = '重置 TCP/IP'; Description = '需要管理员权限，完成后通常需要重启。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'NetworkRestartAdapter'; Category = '网络'; Name = '重启网络适配器'; Description = '需要管理员权限，期间网络会暂时中断。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'NetworkCommonFix'; Category = '网络'; Name = '一键网络修复'; Description = '依次更新 IP、DNS、Winsock、TCP/IP 并复检网络。'; IsRepair = $true }
+
+        [pscustomobject]@{ Id = 'PrinterList'; Category = '打印机'; Name = '查看打印机'; Description = '列出打印机、默认项、状态、驱动和端口。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'PrinterQueue'; Category = '打印机'; Name = '查看打印队列'; Description = '查看 Print Spooler 状态与待打印任务。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'PrinterClearQueue'; Category = '打印机'; Name = '清理打印队列'; Description = '删除所有待打印任务前会再次确认。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'PrinterRestartSpooler'; Category = '打印机'; Name = '重启打印服务'; Description = '重启 Print Spooler，需要管理员权限。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'PrinterOneKeyFix'; Category = '打印机'; Name = '一键修复打印机'; Description = '检查服务、队列并重新检测打印机。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'PrinterDeepRepair'; Category = '打印机'; Name = '打印组件深度修复'; Description = '替换 3 个系统打印组件文件；会创建备份。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'PrinterRpcRepair'; Category = '打印机'; Name = 'win32spl.dll + RPC 修复'; Description = '替换 win32spl.dll 并设置 RPC 打印兼容项。'; IsRepair = $true }
+
+        [pscustomobject]@{ Id = 'SystemSfc'; Category = '系统'; Name = 'SFC 系统文件检查'; Description = '执行 sfc /scannow，需要管理员权限。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'SystemDismScan'; Category = '系统'; Name = 'DISM 系统映像检查'; Description = '执行 DISM /ScanHealth，需要管理员权限。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'SystemDismRepair'; Category = '系统'; Name = 'DISM 系统映像修复'; Description = '执行 DISM /RestoreHealth，可能需要联网。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'WindowsUpdateServices'; Category = '系统'; Name = 'Windows Update 服务检查'; Description = '查看 BITS、Windows Update 等服务状态。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'WindowsUpdateFix'; Category = '系统'; Name = 'Windows Update 基础修复'; Description = '重建更新缓存并重启相关服务，需要管理员权限。'; IsRepair = $true }
+
+        [pscustomobject]@{ Id = 'DiskSpace'; Category = '磁盘'; Name = '查看磁盘空间'; Description = '显示各分区容量、已用和剩余空间。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'TempScan'; Category = '磁盘'; Name = '查找临时文件'; Description = '只扫描用户临时目录、系统临时目录和更新缓存。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'TempCleanup'; Category = '磁盘'; Name = '清理临时文件'; Description = '删除前会扫描并要求确认。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'RecycleBinClean'; Category = '磁盘'; Name = '清空回收站'; Description = '不可撤销，执行前会再次确认。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'DiskHealth'; Category = '磁盘'; Name = '磁盘状态检查'; Description = '读取物理磁盘健康状态。'; IsRepair = $false }
+
+        [pscustomobject]@{ Id = 'SoftwareSearch'; Category = '软件'; Name = '搜索软件'; Description = '通过 winget 搜索软件。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'SoftwareInstall'; Category = '软件'; Name = '安装软件'; Description = '通过 winget 安装指定软件。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'SoftwareUninstall'; Category = '软件'; Name = '卸载软件'; Description = '列出已安装软件并在确认后卸载。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'SoftwareUpdate'; Category = '软件'; Name = '更新软件'; Description = '检查并更新可升级的软件。'; IsRepair = $true }
+        [pscustomobject]@{ Id = 'SoftwareInstalled'; Category = '软件'; Name = '查看已安装软件'; Description = '读取 winget 可识别的已安装软件。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'SoftwareCommon'; Category = '软件'; Name = '常用软件'; Description = '从 config/software.json 选择常用软件安装。'; IsRepair = $true }
+
+        [pscustomobject]@{ Id = 'ComputerInfo'; Category = '设备'; Name = '电脑信息'; Description = '查看系统、硬件、电池和基本网络信息。'; IsRepair = $false }
+        [pscustomobject]@{ Id = 'ComputerConfiguration'; Category = '设备'; Name = '电脑配置'; Description = '查看 CPU、内存、磁盘与显卡配置。'; IsRepair = $false }
+    )
+
+    if ($Category) {
+        return @($items | Where-Object { $_.Category -eq $Category })
+    }
+    return @($items)
+}
+
+function Invoke-SupportToolAction {
+    param([Parameter(Mandatory = $true)][string]$Id)
+
+    $item = Get-SupportToolActionCatalog | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
+    if (-not $item) {
+        throw ('未知工具操作：' + $Id)
+    }
+
+    Write-Log ('从 GUI/命令动作入口启动：' + $item.Name)
+    switch ($Id) {
+        'NetworkInfo' { Show-SupportNetworkInfo }
+        'NetworkEnvironment' { Show-SupportNetworkEnvironment }
+        'NetworkDiagnosis' { Show-SupportNetworkDiagnosis }
+        'NetworkFlushDns' { [void](Invoke-NetworkFlushDns) }
+        'NetworkRenewIp' { [void](Invoke-NetworkRenewIp) }
+        'NetworkResetWinsock' { Invoke-NetworkResetWinsock }
+        'NetworkResetTcpIp' { Invoke-NetworkResetTcpIp }
+        'NetworkRestartAdapter' { [void](Invoke-NetworkRestartAdapter) }
+        'NetworkCommonFix' { Invoke-NetworkCommonFix }
+        'PrinterList' { Show-SupportPrinterList }
+        'PrinterQueue' { Show-SupportPrinterQueue }
+        'PrinterClearQueue' { Invoke-SupportClearPrintQueue }
+        'PrinterRestartSpooler' { Invoke-SupportRestartSpooler }
+        'PrinterOneKeyFix' { Invoke-SupportPrinterOneKeyFix }
+        'PrinterDeepRepair' { [void](Invoke-SupportPrinterRepairScript -ScriptId 1) }
+        'PrinterRpcRepair' { [void](Invoke-SupportPrinterRepairScript -ScriptId 2) }
+        'SystemSfc' { Invoke-SystemSfc }
+        'SystemDismScan' { Invoke-SystemDismScan }
+        'SystemDismRepair' { Invoke-SystemDismRepair }
+        'WindowsUpdateServices' { Show-SupportWindowsUpdateServices }
+        'WindowsUpdateFix' { Invoke-SupportWindowsUpdateBasicFix }
+        'DiskSpace' { Show-SupportDiskSpace }
+        'TempScan' { [void](Show-SupportTempScan) }
+        'TempCleanup' { Invoke-SupportTempCleanup }
+        'RecycleBinClean' { Invoke-SupportRecycleBinClean }
+        'DiskHealth' { Show-SupportDiskHealth }
+        'SoftwareSearch' { Invoke-SoftwareSearch }
+        'SoftwareInstall' { Invoke-SoftwareInstall }
+        'SoftwareUninstall' { Invoke-SoftwareUninstall }
+        'SoftwareUpdate' { Invoke-SoftwareUpdate }
+        'SoftwareInstalled' { Invoke-SoftwareInstalledList }
+        'SoftwareCommon' { Show-CommonSoftwareMenu }
+        'ComputerInfo' { Show-SupportComputerInfo }
+        'ComputerConfiguration' { Show-SupportComputerConfiguration }
+    }
+}
+
 function Initialize-Toolkit {
     Set-SupportConsoleEncoding
 
@@ -5715,6 +5823,18 @@ function Show-MainMenu {
 
 if ($MyInvocation.InvocationName -ne '.') {
     Initialize-Toolkit
+    if ($Action) {
+        try {
+            Invoke-SupportToolAction -Id $Action
+        }
+        catch {
+            Write-ErrorText ('工具操作失败：' + $_.Exception.Message)
+            Write-Log ('工具动作失败: ' + $Action + ' - ' + $_.Exception.Message) 'ERROR'
+        }
+        Write-Host ''
+        Write-PressAnyKeyToReturn
+        exit 0
+    }
     if ($Console) { Write-Log '以兼容控制台模式启动' }
     Show-SupportMainMenu
 }

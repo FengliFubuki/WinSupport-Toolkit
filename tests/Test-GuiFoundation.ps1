@@ -28,10 +28,10 @@ if (@($parseErrors).Count -gt 0) {
 }
 Write-Host '[PASS] GUI PowerShell 语法检查通过' -ForegroundColor Green
 
-foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton')) {
+foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton','ToolActionsPanel','ToolActionsTitle','ToolActionsHint')) {
     if ($xaml -notmatch ('x:Name="' + [regex]::Escape($name) + '"')) { throw "XAML 缺少控件：$name" }
 }
-foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson')) {
+foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson','Get-SupportToolActionCatalog','Start-GuiToolConsoleAction')) {
     if ($gui -notmatch [regex]::Escape($symbol)) { throw "GUI 未复用核心入口：$symbol" }
 }
 if ($gui -notmatch 'Invoke-SupportFullDiagnosis\s+-Quiet') { throw 'GUI 全面诊断没有启用静默模式' }
