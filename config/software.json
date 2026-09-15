@@ -48,6 +48,55 @@
       "Description": "企业微信 Windows 版",
       "Category": "办公",
       "RequiresAdmin": false
+    },
+    {
+      "Name": "照片",
+      "PackageId": "Microsoft.Photos",
+      "Description": "Windows 官方照片查看和管理应用",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "画图",
+      "PackageId": "Microsoft.Paint",
+      "Description": "Windows 官方绘图工具",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "记事本",
+      "PackageId": "Microsoft.WindowsNotepad",
+      "Description": "Windows 官方文本编辑器",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "计算器",
+      "PackageId": "Microsoft.WindowsCalculator",
+      "Description": "Windows 官方计算器",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "相机",
+      "PackageId": "Microsoft.WindowsCamera",
+      "Description": "Windows 官方相机应用",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "录音机",
+      "PackageId": "Microsoft.WindowsSoundRecorder",
+      "Description": "Windows 官方录音应用",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
+    },
+    {
+      "Name": "Windows 终端",
+      "PackageId": "Microsoft.WindowsTerminal",
+      "Description": "Windows 官方终端应用",
+      "Category": "Windows 官方软件",
+      "RequiresAdmin": false
     }
   ]
 }

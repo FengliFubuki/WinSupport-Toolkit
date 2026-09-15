@@ -111,7 +111,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticR
 }
 ```
 
-查询 winget ID 的方法：进入工具「软件 -> 搜索软件」，或在命令行执行 `winget search 软件名`。`Category` 为可选字段；未填写时会归入“其他”。
+查询 winget ID 的方法：进入工具「软件 -> 搜索软件」，或在命令行执行 `winget search 软件名`。`Category` 为可选字段；未填写时会归入“其他”。常用软件菜单内置“Windows 官方软件”分类，包含照片、画图、记事本、计算器、相机、录音机和 Windows 终端等应用。
 
 ## 设计约束
 

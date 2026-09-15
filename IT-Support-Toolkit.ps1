@@ -3662,7 +3662,7 @@ function Show-CommonSoftwareMenu {
             Write-PressAnyKeyToReturn
             return
         }
-        $categories = @('浏览器', '办公', '工具', '开发', '其他')
+        $categories = @('浏览器', '办公', '工具', '开发', 'Windows 官方软件', '其他')
         $numbered = @()
         $idx = 1
         foreach ($category in $categories) {
