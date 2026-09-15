@@ -1,0 +1,41 @@
+name: Windows PowerShell tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows-powershell-51:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diagnostic rules
+        shell: powershell
+        run: .\tests\Test-DiagnosticRules.ps1
+      - name: GUI foundation
+        shell: powershell
+        run: .\tests\Test-GuiFoundation.ps1
+      - name: GUI integration
+        shell: powershell
+        run: .\tests\Test-GuiIntegration.ps1
+      - name: GUI initialization and events
+        shell: powershell
+        run: powershell.exe -Sta -NoProfile -ExecutionPolicy Bypass -File .\gui\WinSupport-GUI.ps1 -ValidateOnly
+
+  powershell-7:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diagnostic rules
+        shell: pwsh
+        run: .\tests\Test-DiagnosticRules.ps1
+      - name: GUI foundation
+        shell: pwsh
+        run: .\tests\Test-GuiFoundation.ps1
+      - name: GUI integration
+        shell: pwsh
+        run: .\tests\Test-GuiIntegration.ps1
+      - name: GUI initialization and events
+        shell: pwsh
+        run: pwsh.exe -Sta -NoProfile -ExecutionPolicy Bypass -File .\gui\WinSupport-GUI.ps1 -ValidateOnly
