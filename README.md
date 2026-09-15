@@ -3,7 +3,7 @@
 面向 IT Support / Desktop Support 的 Windows 日常运维辅助工具。使用 PowerShell + Windows 自带命令 + winget 实现，无第三方依赖。
 当前为 V1.3 开发版本，新增 WPF GUI 初版，同时保留控制台兼容入口。
 
-维护者：[@FengliFubuki](https://github.com/FengliFubuki)
+发行商 / 维护者：[@FengliFubuki](https://github.com/FengliFubuki)
 
 ## 版本定位
 

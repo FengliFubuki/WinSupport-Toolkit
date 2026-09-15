@@ -29,6 +29,7 @@ $ErrorActionPreference = 'Continue'
 $script:ToolName    = 'Windows IT Support Toolkit'
 $script:ToolVersion = '1.3.0'
 $script:ToolAuthor  = 'FengliFubuki'
+$script:ToolPublisher = 'FengliFubuki'
 $script:RequestedAction = $Action
 $script:NoPause = $NoPause
 $script:ScriptRoot  = $PSScriptRoot
@@ -85,6 +86,7 @@ function Write-Banner {
     Write-Host '+--------------------------------------------------+' -ForegroundColor DarkCyan
     Write-Host '|  WinSupport Toolkit  v1.3.0                     |' -ForegroundColor Cyan
     Write-Host '|  电脑急救站                                      |' -ForegroundColor DarkCyan
+    Write-Host ('|  发行商：' + $script:ToolPublisher) -ForegroundColor DarkCyan
     Write-Host '+--------------------------------------------------+' -ForegroundColor DarkCyan
     Write-Host ''
 }

@@ -172,7 +172,7 @@
                 <TextBlock Text="IT Assistant" FontSize="24" FontWeight="SemiBold" Foreground="#4C3C9D" HorizontalAlignment="Center" />
                 <TextBlock Text="🧑‍💻  🛠️  ✨" FontSize="48" HorizontalAlignment="Center" Margin="0,24" />
                 <TextBlock x:Name="AssistantStatusText" Text="准备好了，开始检查这台电脑吧 ✨" TextWrapping="Wrap" TextAlignment="Center" FontSize="16" Foreground="#4C3C9D" />
-                <TextBlock Text="Created by FengliFubuki" TextAlignment="Center" Foreground="#8278B4" FontSize="12" Margin="0,30,0,0" />
+                <TextBlock Text="发行商：FengliFubuki" TextAlignment="Center" Foreground="#8278B4" FontSize="12" Margin="0,30,0,0" />
             </StackPanel>
         </Border>
     </Grid>

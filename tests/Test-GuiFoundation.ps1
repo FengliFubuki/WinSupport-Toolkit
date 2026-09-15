@@ -36,6 +36,7 @@ foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot',
 }
 if ($gui -notmatch 'Invoke-SupportFullDiagnosis\s+-Quiet') { throw 'GUI 全面诊断没有启用静默模式' }
 if ($gui -match '(?<!\$)\(\s*if\b') { throw 'GUI 包含会在运行时把 if 误当命令的参数表达式' }
+if ($xaml -notmatch '发行商：FengliFubuki') { throw 'GUI 未显示 GitHub 发行商名称' }
 
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     Add-Type -AssemblyName PresentationCore
