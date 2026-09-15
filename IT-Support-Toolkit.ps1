@@ -18,13 +18,14 @@
 #>
 
 param(
-    [switch]$SkipBanner
+    [switch]$SkipBanner,
+    [switch]$Console
 )
 
 $ErrorActionPreference = 'Continue'
 
 $script:ToolName    = 'Windows IT Support Toolkit'
-$script:ToolVersion = '1.2.0'
+$script:ToolVersion = '1.3.0'
 $script:ScriptRoot  = $PSScriptRoot
 if (-not $script:ScriptRoot) {
     try {
@@ -5702,5 +5703,6 @@ function Show-MainMenu {
 
 if ($MyInvocation.InvocationName -ne '.') {
     Initialize-Toolkit
+    if ($Console) { Write-Log '以兼容控制台模式启动' }
     Show-SupportMainMenu
 }

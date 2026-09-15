@@ -1,0 +1,36 @@
+#requires -Version 5.1
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$xamlPath = Join-Path $root 'gui\MainWindow.xaml'
+$guiPath = Join-Path $root 'gui\WinSupport-GUI.ps1'
+$corePath = Join-Path $root 'IT-Support-Toolkit.ps1'
+
+foreach ($path in @($xamlPath, $guiPath, $corePath)) {
+    if (-not (Test-Path -LiteralPath $path)) { throw "找不到 GUI 基础文件：$path" }
+}
+
+$xaml = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
+$null = [xml]$xaml
+$gui = Get-Content -LiteralPath $guiPath -Raw -Encoding UTF8
+
+foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton')) {
+    if ($xaml -notmatch ('x:Name="' + [regex]::Escape($name) + '"')) { throw "XAML 缺少控件：$name" }
+}
+foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson')) {
+    if ($gui -notmatch [regex]::Escape($symbol)) { throw "GUI 未复用核心入口：$symbol" }
+}
+
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    Add-Type -AssemblyName PresentationCore
+    Add-Type -AssemblyName PresentationFramework
+    Add-Type -AssemblyName WindowsBase
+    $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
+    $window = [Windows.Markup.XamlReader]::Load($reader)
+    if (-not $window) { throw 'WPF XAML 加载失败' }
+    Write-Host '[PASS] WPF XAML 可以加载' -ForegroundColor Green
+}
+else {
+    Write-Host '[INFO] 当前非 Windows，跳过 WPF 运行时加载；XML 和静态入口检查已通过。' -ForegroundColor Yellow
+}
+
+Write-Host '[PASS] GUI 基础检查通过' -ForegroundColor Green

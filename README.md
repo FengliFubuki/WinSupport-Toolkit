@@ -1,20 +1,23 @@
-# Windows IT Support Toolkit V1.2
+# Windows IT Support Toolkit V1.3
 
 面向 IT Support / Desktop Support 的 Windows 日常运维辅助工具。使用 PowerShell + Windows 自带命令 + winget 实现，无第三方依赖。
-当前为 V1.2 开发版本。
+当前为 V1.3 开发版本，新增 WPF GUI 初版，同时保留控制台兼容入口。
 
 ## 版本定位
 
 - V1.0 = Stable：已完成 Windows 10 / Windows 11 实机测试，视为稳定基线。
 - V1.1 = Diagnostic Engine / Network Diagnosis Upgrade：诊断引擎基础、网络诊断升级、一键诊断汇总、重新检测和结构化报告兼容。
 - V1.2 = Network Environment：代理、VPN/TUN、公网出口、出口地区及中国大陆/海外网络可达性检测。
+- V1.3 = WPF GUI Foundation：使用 PowerShell + WPF + XAML 提供总览、全面诊断、分类详情和报告页面。
 
 ## 文件说明
 
 | 文件 | 作用 |
 | --- | --- |
 | `IT-Support-Toolkit.ps1` | 主程序（所有功能） |
-| `run.bat` | 双击启动入口（自动选择 pwsh / Windows PowerShell，绕过执行策略） |
+| `run.bat` | 双击启动入口，默认启动 WPF GUI；使用 `run.bat --console` 进入兼容控制台 |
+| `gui\WinSupport-GUI.ps1` | WPF 启动、事件绑定、后台诊断和报告导出协调 |
+| `gui\MainWindow.xaml` | WPF 主窗口布局和浅色卡片式主题 |
 | `config\software.json` | 常用软件快捷安装列表（可自行增删改） |
 | `tests\Test-DiagnosticRules.ps1` | V1.1/V1.2 诊断规则和报告兼容性测试 |
 | `reports\` | 程序运行时自动创建，用于保存导出报告 |
@@ -25,6 +28,22 @@
 1. 将整个文件夹复制到目标 Windows 电脑（建议放到本地磁盘，例如 `C:\IT-Tools\`）。
 2. 双击 `run.bat`。
 3. 普通查看功能无需管理员权限；修复类功能会检测权限，并在需要时通过标准 UAC 提示重新以管理员身份运行。
+
+GUI 也可以手动运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\gui\WinSupport-GUI.ps1
+```
+
+如果 GUI 初始化失败，启动脚本会提示原因并回退到控制台菜单。需要直接使用旧控制台时运行 `run.bat --console`，或执行 `IT-Support-Toolkit.ps1 -Console`。直接运行主脚本的原有方式仍然保留。
+
+## V1.3 GUI 当前范围
+
+- 已完成：总览、六类状态卡片、全面诊断、后台执行状态、问题/建议展示、分类详情、网络/系统/磁盘/打印机分类入口、报告摘要、历史报告列表和 TXT / JSON / TXT+JSON 导出。
+- 已复用：现有诊断对象、分类缓存、全面诊断、报告快照和报告导出函数；GUI 不复制诊断规则。
+- 兼容模式：网络、系统、磁盘、打印机、软件、电脑相关的复杂工具操作通过“在兼容模式打开”进入原控制台菜单，保留原有确认和 UAC 逻辑。
+- 限制：第一版不内嵌重写 SFC、DISM、winget、打印队列等复杂交互；后台操作显示“正在执行，请稍候”，不伪造百分比进度。
+- 视觉资源：右侧 IT Assistant 当前使用本地 XAML 占位卡片，后续可替换为 `gui\assets\` 下的本地 PNG，不引用网络图片或 CDN。
 
 也可以手动运行：
 
@@ -90,6 +109,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-DiagnosticR
 ```
 
 测试使用模拟数据验证正常网络、系统代理、WinHTTP、VPN/TUN、代理不可用、无 IPv4、网关/DNS 异常、公网 Ping 被阻断、磁盘阈值、Windows Update 服务、关键服务和 TXT / JSON 报告兼容性，不会修改系统配置。网络环境公网请求需在 Windows 实机上验证。
+
+GUI 基础检查：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-GuiFoundation.ps1
+```
 
 ## 兼容性验证
 
