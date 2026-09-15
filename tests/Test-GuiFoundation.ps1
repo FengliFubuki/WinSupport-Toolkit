@@ -20,6 +20,13 @@ Write-Host '[PASS] PowerShell 脚本 UTF-8 BOM 编码检查通过' -ForegroundCo
 $xaml = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
 $null = [xml]$xaml
 $gui = Get-Content -LiteralPath $guiPath -Raw -Encoding UTF8
+$parseTokens = $null
+$parseErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile($guiPath, [ref]$parseTokens, [ref]$parseErrors)
+if (@($parseErrors).Count -gt 0) {
+    throw ('GUI PowerShell 语法检查失败：' + ((@($parseErrors) | ForEach-Object { $_.Message }) -join '；'))
+}
+Write-Host '[PASS] GUI PowerShell 语法检查通过' -ForegroundColor Green
 
 foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton')) {
     if ($xaml -notmatch ('x:Name="' + [regex]::Escape($name) + '"')) { throw "XAML 缺少控件：$name" }
@@ -27,6 +34,7 @@ foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel
 foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson')) {
     if ($gui -notmatch [regex]::Escape($symbol)) { throw "GUI 未复用核心入口：$symbol" }
 }
+if ($gui -notmatch 'Invoke-SupportFullDiagnosis\s+-Quiet') { throw 'GUI 全面诊断没有启用静默模式' }
 
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     Add-Type -AssemblyName PresentationCore

@@ -3502,7 +3502,18 @@ function Get-SupportWingetRows {
         if (-not $line.Trim() -or $line -match '(?i)^(No package|没有找到|Name\s+Id|名称\s+ID|次の)' -or $line -match '(?i)^(The following|以下|This package)') { continue }
         if ($line -match '^\s*-{3,}') { continue }
         $values = @{}
-        if ($headerTokens.Count -gt 0) {
+        $splitValues = @($line.Trim() -split '\s{2,}')
+        $knownColumnCount = @($columnNames | Where-Object { $_.Name }).Count
+        if ($knownColumnCount -gt 0 -and $splitValues.Count -eq $knownColumnCount) {
+            $splitIndex = 0
+            for ($c = 0; $c -lt $columnNames.Count; $c++) {
+                if ($columnNames[$c].Name) {
+                    $values[$c] = $splitValues[$splitIndex]
+                    $splitIndex++
+                }
+            }
+        }
+        elseif ($headerTokens.Count -gt 0) {
             for ($c = 0; $c -lt $headerTokens.Count; $c++) {
                 $start = [int]$headerTokens[$c].Index
                 if ($start -ge $line.Length) { $value = '' }
