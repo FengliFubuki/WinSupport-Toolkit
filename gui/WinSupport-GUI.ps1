@@ -52,6 +52,13 @@ function Set-GuiText {
     if ($control) { $control.Text = if ($null -eq $Text) { '' } else { [string]$Text } }
 }
 
+function Show-GuiException {
+    param($ErrorRecord)
+    $message = if ($ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { [string]$ErrorRecord }
+    try { Write-Log ('GUI 操作失败：' + $message) 'ERROR' } catch {}
+    [System.Windows.MessageBox]::Show($message, '操作失败', 'OK', 'Error') | Out-Null
+}
+
 function Get-GuiStatusBrush {
     param([string]$Status)
     $color = switch ($Status) {
@@ -139,6 +146,9 @@ function Complete-GuiAsyncOperation {
     $result = $null
     try {
         $result = @($ps.EndInvoke($script:GuiState.PendingAsync))
+        if ($ps.Streams.Error.Count -gt 0) {
+            throw (($ps.Streams.Error | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
+        }
         if ($kind -eq 'diagnosis') {
             $script:GuiState.Session = $result | Where-Object { $_.PSObject.Properties['OverallStatus'] } | Select-Object -Last 1
             if ($script:GuiState.Session) {
@@ -160,7 +170,7 @@ function Complete-GuiAsyncOperation {
         }
     }
     catch {
-        [System.Windows.MessageBox]::Show($_.Exception.Message, '操作失败', 'OK', 'Error') | Out-Null
+        Show-GuiException $_
     }
     finally {
         $ps.Dispose()
@@ -215,8 +225,7 @@ function Update-GuiOverview {
         $state = New-Object System.Windows.Controls.TextBlock; $state.Text = $status; $state.Foreground = Get-GuiStatusBrush $status; $state.FontWeight = 'SemiBold'; $state.Margin = '0,8,0,0'
         $summary = New-Object System.Windows.Controls.TextBlock; $summary.Text = Get-GuiStatusSummary $status; $summary.Foreground = '#77738D'; $summary.FontSize = 12
         [void]$stack.Children.Add($state); [void]$stack.Children.Add($summary); $card.Content = $stack
-        $cardCategory = $category
-        $card.Add_Click({ Show-GuiCategoryDetail $cardCategory })
+        $card.Add_Click({ param($sender, $eventArgs); Show-GuiCategoryDetail ([string]$sender.Tag) })
         [void]$panel.Children.Add($card)
     }
 }
@@ -322,32 +331,46 @@ function Open-GuiCompatibilityMode {
     Start-Process -FilePath $exe -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$script:CorePath,'-Console') | Out-Null
 }
 
+function Add-GuiClickHandler {
+    param(
+        [System.Windows.Controls.Button]$Button,
+        [scriptblock]$Action
+    )
+    if (-not $Button) { throw 'GUI 控件未找到，无法绑定按钮事件。' }
+    $handlerScript = {
+        param($sender, $eventArgs)
+        try { & $Action $sender $eventArgs }
+        catch { Show-GuiException $_ }
+    }.GetNewClosure()
+    $handler = [System.Windows.RoutedEventHandler]$handlerScript
+    $Button.AddHandler([System.Windows.Controls.Button]::ClickEvent, $handler)
+}
+
 function Add-GuiEvents {
     foreach ($name in @('NavOverview','NavDiagnosis','NavReports','NavNetwork','NavPrinter','NavSystem','NavDisk','NavSoftware','NavDevice')) {
         $button = Find-GuiControl $name
-        if ($button) {
-            $button.Add_Click({
-                $tag = [string]$this.Tag
-                switch ($tag) {
-                    'overview' { Show-GuiOverview }
-                    'diagnosis' { Show-GuiDiagnosis }
-                    'reports' { Show-GuiReports }
-                    default { if ($tag -in @('网络','系统','磁盘','打印机','设备','Windows')) { Show-GuiCategoryDetail $tag } else { Show-GuiPlaceholder $tag } }
-                }
-            })
+        Add-GuiClickHandler $button {
+            param($sender, $eventArgs)
+            $tag = [string]$sender.Tag
+            switch ($tag) {
+                'overview' { Show-GuiOverview }
+                'diagnosis' { Show-GuiDiagnosis }
+                'reports' { Show-GuiReports }
+                default { if ($tag -in @('网络','系统','磁盘','打印机','设备','Windows')) { Show-GuiCategoryDetail $tag } else { Show-GuiPlaceholder $tag } }
+            }
         }
     }
-    (Find-GuiControl 'StartDiagnosisButton').Add_Click({ Start-GuiDiagnosis })
-    (Find-GuiControl 'RunDiagnosisAgainButton').Add_Click({ Start-GuiDiagnosis })
-    (Find-GuiControl 'ViewResultsButton').Add_Click({ if ($script:GuiState.Session) { Show-GuiDiagnosis } else { Start-GuiDiagnosis } })
-    (Find-GuiControl 'ExportOverviewButton').Add_Click({ Start-GuiExport 'both' })
-    (Find-GuiControl 'RefreshCategoryButton').Add_Click({ Start-GuiCategoryDiagnosis $script:GuiState.CurrentCategory })
-    (Find-GuiControl 'CompatibilityButton').Add_Click({ Open-GuiCompatibilityMode $script:GuiState.CurrentCategory })
-    (Find-GuiControl 'PlaceholderCompatibilityButton').Add_Click({ Open-GuiCompatibilityMode '' })
-    (Find-GuiControl 'ExportTxtButton').Add_Click({ Start-GuiExport 'txt' })
-    (Find-GuiControl 'ExportJsonButton').Add_Click({ Start-GuiExport 'json' })
-    (Find-GuiControl 'ExportBothButton').Add_Click({ Start-GuiExport 'both' })
-    $script:GuiTimer.Add_Tick({ Complete-GuiAsyncOperation })
+    Add-GuiClickHandler (Find-GuiControl 'StartDiagnosisButton') { Start-GuiDiagnosis }
+    Add-GuiClickHandler (Find-GuiControl 'RunDiagnosisAgainButton') { Start-GuiDiagnosis }
+    Add-GuiClickHandler (Find-GuiControl 'ViewResultsButton') { if ($script:GuiState.Session) { Show-GuiDiagnosis } else { Start-GuiDiagnosis } }
+    Add-GuiClickHandler (Find-GuiControl 'ExportOverviewButton') { Start-GuiExport 'both' }
+    Add-GuiClickHandler (Find-GuiControl 'RefreshCategoryButton') { Start-GuiCategoryDiagnosis $script:GuiState.CurrentCategory }
+    Add-GuiClickHandler (Find-GuiControl 'CompatibilityButton') { Open-GuiCompatibilityMode $script:GuiState.CurrentCategory }
+    Add-GuiClickHandler (Find-GuiControl 'PlaceholderCompatibilityButton') { Open-GuiCompatibilityMode '' }
+    Add-GuiClickHandler (Find-GuiControl 'ExportTxtButton') { Start-GuiExport 'txt' }
+    Add-GuiClickHandler (Find-GuiControl 'ExportJsonButton') { Start-GuiExport 'json' }
+    Add-GuiClickHandler (Find-GuiControl 'ExportBothButton') { Start-GuiExport 'both' }
+    $script:GuiTimer.Add_Tick([System.EventHandler]{ Complete-GuiAsyncOperation })
 }
 
 try {
