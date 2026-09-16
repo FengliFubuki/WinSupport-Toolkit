@@ -392,7 +392,11 @@ function Invoke-GuiSmokeTest {
     $expectedToolCount = @(Get-SupportToolActionCatalog -Category '网络').Count
     if (-not $toolPanel -or $toolPanel.Children.Count -ne $expectedToolCount) { throw 'GUI 冒烟测试失败：网络工具卡片没有完整生成。' }
 
-    Write-Host '[PASS] GUI 按钮、后台全面诊断、分类详情和工具卡片链路通过' -ForegroundColor Green
+    $consoleCommand = New-GuiLegacyConsoleCommand -ActionId 'NetworkInfo' -SkipBanner
+    if ($consoleCommand -notmatch 'chcp\.com\s+65001') { throw 'GUI 冒烟测试失败：兼容控制台命令没有设置 UTF-8 代码页。' }
+    if ($consoleCommand -notmatch "-Action 'NetworkInfo'") { throw 'GUI 冒烟测试失败：兼容控制台命令没有传递工具动作。' }
+
+    Write-Host '[PASS] GUI 按钮、后台全面诊断、分类详情、工具卡片和 UTF-8 兼容控制台链路通过' -ForegroundColor Green
 }
 
 function Start-GuiExport {
@@ -411,7 +415,10 @@ function Open-GuiCompatibilityMode {
     $exe = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
     if (-not $exe) { $exe = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source }
     if (-not $exe) { $exe = 'powershell.exe' }
-    Start-Process -FilePath $exe -ArgumentList @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$script:CorePath,'-Console') | Out-Null
+    $consoleCommand = New-GuiLegacyConsoleCommand
+    $arguments = @('-NoExit','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-Command',$consoleCommand)
+    $argumentLine = (($arguments | ForEach-Object { ConvertTo-GuiProcessArgument ([string]$_) }) -join ' ')
+    Start-Process -FilePath $exe -ArgumentList $argumentLine -ErrorAction Stop | Out-Null
 }
 
 function ConvertTo-GuiProcessArgument {
@@ -419,6 +426,35 @@ function ConvertTo-GuiProcessArgument {
     if ($null -eq $Value) { return '""' }
     if ($Value -match '[\s"]') { return ('"' + $Value.Replace('"', '\"') + '"') }
     return $Value
+}
+
+function ConvertTo-GuiPowerShellLiteral {
+    param([string]$Value)
+    if ($null -eq $Value) { return "''" }
+    return ("'" + $Value.Replace("'", "''") + "'")
+}
+
+function New-GuiLegacyConsoleCommand {
+    param(
+        [string]$ActionId,
+        [switch]$SkipBanner
+    )
+
+    # Start the inherited console in UTF-8 before PowerShell loads the core
+    # script.  This matters for a console created from WPF, which otherwise
+    # often inherits a legacy code page even though the .ps1 files have a BOM.
+    $coreInvocation = '& ' + (ConvertTo-GuiPowerShellLiteral $script:CorePath) + ' -Console'
+    if ($SkipBanner) { $coreInvocation += ' -SkipBanner' }
+    if ($ActionId) { $coreInvocation += ' -Action ' + (ConvertTo-GuiPowerShellLiteral $ActionId) }
+
+    return (@(
+        '$utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false',
+        '[Console]::InputEncoding = $utf8',
+        '[Console]::OutputEncoding = $utf8',
+        '$OutputEncoding = $utf8',
+        'try { & chcp.com 65001 | Out-Null } catch {}',
+        $coreInvocation
+    ) -join '; ')
 }
 
 function Start-GuiToolConsoleAction {
@@ -439,7 +475,8 @@ function Start-GuiToolConsoleAction {
 
     $exe = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source } else { (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source }
     if (-not $exe) { $exe = 'powershell.exe' }
-    $arguments = @('-NoExit','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$script:CorePath,'-Console','-SkipBanner','-Action',$ActionId)
+    $consoleCommand = New-GuiLegacyConsoleCommand -ActionId $ActionId -SkipBanner
+    $arguments = @('-NoExit','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-Command',$consoleCommand)
     $argumentLine = (($arguments | ForEach-Object { ConvertTo-GuiProcessArgument ([string]$_) }) -join ' ')
     Start-Process -FilePath $exe -ArgumentList $argumentLine -ErrorAction Stop | Out-Null
 }

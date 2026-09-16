@@ -64,6 +64,15 @@ function Test-SupportWindows {
 }
 
 function Set-SupportConsoleEncoding {
+    # GUI compatibility actions start a fresh ConsoleHost.  Set the Windows
+    # console code page as well as the .NET encodings so UTF-8 source text is
+    # rendered correctly instead of being interpreted as the active ANSI page.
+    try {
+        if ($Host -and $Host.Name -eq 'ConsoleHost') {
+            & chcp.com 65001 | Out-Null
+        }
+    }
+    catch {}
     try {
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     }

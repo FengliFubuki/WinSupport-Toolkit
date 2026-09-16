@@ -20,6 +20,7 @@ Write-Host '[PASS] PowerShell 脚本 UTF-8 BOM 编码检查通过' -ForegroundCo
 $xaml = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
 $null = [xml]$xaml
 $gui = Get-Content -LiteralPath $guiPath -Raw -Encoding UTF8
+$core = Get-Content -LiteralPath $corePath -Raw -Encoding UTF8
 $parseTokens = $null
 $parseErrors = $null
 [void][System.Management.Automation.Language.Parser]::ParseFile($guiPath, [ref]$parseTokens, [ref]$parseErrors)
@@ -31,12 +32,14 @@ Write-Host '[PASS] GUI PowerShell 语法检查通过' -ForegroundColor Green
 foreach ($name in @('OverviewPanel','DiagnosisPanel','DetailPanel','ReportsPanel','StartDiagnosisButton','ExportTxtButton','ExportJsonButton','ExportBothButton','ToolActionsPanel','ToolActionsTitle','ToolActionsHint')) {
     if ($xaml -notmatch ('x:Name="' + [regex]::Escape($name) + '"')) { throw "XAML 缺少控件：$name" }
 }
-foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson','Get-SupportToolActionCatalog','Start-GuiToolConsoleAction')) {
+foreach ($symbol in @('Invoke-SupportFullDiagnosis','New-SupportReportSnapshot','Export-SupportReportTxt','Export-SupportReportJson','Get-SupportToolActionCatalog','Start-GuiToolConsoleAction','New-GuiLegacyConsoleCommand')) {
     if ($gui -notmatch [regex]::Escape($symbol)) { throw "GUI 未复用核心入口：$symbol" }
 }
 if ($gui -notmatch 'Invoke-SupportFullDiagnosis\s+-Quiet') { throw 'GUI 全面诊断没有启用静默模式' }
 if ($gui -match '(?<!\$)\(\s*if\b') { throw 'GUI 包含会在运行时把 if 误当命令的参数表达式' }
 if ($xaml -notmatch '发行商：FengliFubuki') { throw 'GUI 未显示 GitHub 发行商名称' }
+if ($gui -notmatch 'chcp\.com\s+65001') { throw 'GUI 启动兼容控制台时没有强制 UTF-8 代码页' }
+if ($core -notmatch 'chcp\.com\s+65001') { throw '核心控制台初始化时没有强制 UTF-8 代码页' }
 
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
     Add-Type -AssemblyName PresentationCore
